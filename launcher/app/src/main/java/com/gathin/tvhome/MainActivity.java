@@ -19,6 +19,7 @@ import android.net.wifi.WifiInfo;
 import android.net.wifi.WifiManager;
 import android.net.Uri;
 import android.os.Bundle;
+import android.os.SystemClock;
 import android.os.Handler;
 import android.os.Looper;
 import android.provider.Settings;
@@ -81,6 +82,7 @@ public class MainActivity extends Activity implements AppAdapter.TileListener {
     private ImageView bgPhoto;
     private int bgRes;
     private TextView btnWifi;
+    private BudsToggle buds;
     private SpringAnimation springX, springY;
     private float glassTargetX, glassTargetY;
     private boolean glassShown;
@@ -102,6 +104,27 @@ public class MainActivity extends Activity implements AppAdapter.TileListener {
             handler.post(MainActivity.this::updateWifiLabel);
         }
     };
+    // Idle photo screen. Kept shorter than Amazon's own screensaver timer (5 min) so ours is the one you see.
+    private static final long IDLE_MS = 2 * 60_000;
+    private SaverView saver;
+    private TextView saverCountdown;
+    private long saverDueAt;
+    // Counts down to the photo screen; one setText a second, only while the launcher is in front.
+    private final Runnable countdownTick = new Runnable() {
+        @Override
+        public void run() {
+            long left = Math.max(0, (saverDueAt - SystemClock.uptimeMillis() + 999) / 1000);
+            saverCountdown.setText(getString(R.string.saver_countdown, left / 60, left % 60));
+            if (left > 0) handler.postDelayed(this, 1000);
+        }
+    };
+    private final Runnable showSaver = () -> {
+        if (saver != null) return;
+        handler.removeCallbacks(countdownTick);
+        saver = new SaverView(this);
+        ((ViewGroup) findViewById(android.R.id.content)).addView(saver);
+        saver.start();
+    };
     private final Runnable minuteTick = new Runnable() {
         @Override
         public void run() {
@@ -116,6 +139,7 @@ public class MainActivity extends Activity implements AppAdapter.TileListener {
     protected void onCreate(Bundle savedInstanceState) {
         super.onCreate(savedInstanceState);
         setContentView(R.layout.activity_main);
+        saverCountdown = findViewById(R.id.saverCountdown);
         density = getResources().getDisplayMetrics().density;
         COLUMNS = Math.max(1, getResources().getInteger(R.integer.columns));
         liveTvPkg = getString(R.string.live_tv_package).trim();
@@ -205,6 +229,15 @@ public class MainActivity extends Activity implements AppAdapter.TileListener {
             if (keyCode == KeyEvent.KEYCODE_DPAD_LEFT && v.getId() == R.id.btnInputs) return true;
             return keyCode == KeyEvent.KEYCODE_DPAD_RIGHT && v.getId() == R.id.btnSettings;
         };
+        tintIcons((TextView) btnInputs);
+        tintIcons((TextView) btnSettings);
+        TextView btnBt = findViewById(R.id.btnBt);
+        tintIcons(btnBt);
+        btnBt.setOnKeyListener(pillKeys);
+        buds = new BudsToggle(this, btnBt, icon -> {
+            btnBt.setCompoundDrawablesRelativeWithIntrinsicBounds(icon, 0, 0, 0);
+            tintIcons(btnBt);
+        });
         btnInputs.setOnKeyListener(pillKeys);
         btnWifi.setOnKeyListener(pillKeys);
         btnSettings.setOnKeyListener(pillKeys);
@@ -234,8 +267,10 @@ public class MainActivity extends Activity implements AppAdapter.TileListener {
         updateBackground();
         updateWifiLabel();
         handler.postDelayed(minuteTick, MINUTE_MS);
-        ConnectivityManager cm = getSystemService(ConnectivityManager.class);
-        if (cm != null) cm.registerDefaultNetworkCallback(networkCallback);
+        restartIdle();
+        buds.resume();
+        ConnectivityManager cm = (ConnectivityManager) getSystemService(CONNECTIVITY_SERVICE);
+        if (cm != null) cm.registerNetworkCallback(new android.net.NetworkRequest.Builder().build(), networkCallback);
 
         // Return to the tile we left from, or the first one.
         grid.post(() -> {
@@ -245,11 +280,41 @@ public class MainActivity extends Activity implements AppAdapter.TileListener {
         });
     }
 
+    private void restartIdle() {
+        handler.removeCallbacks(showSaver);
+        handler.removeCallbacks(countdownTick);
+        saverDueAt = SystemClock.uptimeMillis() + IDLE_MS;
+        handler.postDelayed(showSaver, IDLE_MS);
+        countdownTick.run();
+    }
+
+    private void hideSaver() {
+        if (saver == null) return;
+        saver.stop();
+        ((ViewGroup) saver.getParent()).removeView(saver);
+        saver = null;
+    }
+
+    /** Any button hides the photo screen (and is swallowed) and restarts the idle countdown. */
+    @Override
+    public boolean dispatchKeyEvent(KeyEvent e) {
+        restartIdle();
+        if (saver != null) {
+            if (e.getAction() == KeyEvent.ACTION_DOWN) hideSaver();
+            return true;
+        }
+        return super.dispatchKeyEvent(e);
+    }
+
     @Override
     protected void onPause() {
+        buds.pause();
+        handler.removeCallbacks(showSaver);
+        handler.removeCallbacks(countdownTick);
+        hideSaver();
         super.onPause();
         handler.removeCallbacks(minuteTick);
-        ConnectivityManager cm = getSystemService(ConnectivityManager.class);
+        ConnectivityManager cm = (ConnectivityManager) getSystemService(CONNECTIVITY_SERVICE);
         if (cm != null) cm.unregisterNetworkCallback(networkCallback);
     }
 
@@ -592,20 +657,19 @@ public class MainActivity extends Activity implements AppAdapter.TileListener {
     /** Shows the Wi-Fi network name on the button when we can read it, otherwise the connection type. */
     // Signal bars only (no network name, so screenshots stay private); text only when something is wrong.
     private void updateWifiLabel() {
-        ConnectivityManager cm = getSystemService(ConnectivityManager.class);
-        Network net = cm != null ? cm.getActiveNetwork() : null;
-        NetworkCapabilities caps = net != null ? cm.getNetworkCapabilities(net) : null;
-        if (caps == null) {
+        ConnectivityManager cm = (ConnectivityManager) getSystemService(CONNECTIVITY_SERVICE);
+        android.net.NetworkInfo ni = cm != null ? cm.getActiveNetworkInfo() : null;
+        if (ni == null || !ni.isConnected()) {
             setWifiPill(R.drawable.ic_wifi_off, getString(R.string.offline), COLOR_ERROR);
             return;
         }
-        boolean online = caps.hasCapability(NetworkCapabilities.NET_CAPABILITY_VALIDATED);
-        if (caps.hasTransport(NetworkCapabilities.TRANSPORT_ETHERNET)) {
-            setWifiPill(R.drawable.ic_ethernet, online ? getString(R.string.ethernet) : getString(R.string.no_internet),
-                    online ? 0 : COLOR_WARN);
+        // ponytail: API 22 has no NET_CAPABILITY_VALIDATED, so "no internet" is not detected here.
+        boolean online = true;
+        if (ni.getType() == ConnectivityManager.TYPE_ETHERNET) {
+            setWifiPill(R.drawable.ic_ethernet, getString(R.string.ethernet), 0);
             return;
         }
-        WifiManager wm = getApplicationContext().getSystemService(WifiManager.class);
+        WifiManager wm = (WifiManager) getApplicationContext().getSystemService(WIFI_SERVICE);
         WifiInfo info = wm != null ? wm.getConnectionInfo() : null;
         int bars = info != null ? WifiManager.calculateSignalLevel(info.getRssi(), WIFI_ICONS.length) : 0;
         if (!online) {
@@ -615,8 +679,16 @@ public class MainActivity extends Activity implements AppAdapter.TileListener {
         setWifiPill(WIFI_ICONS[bars], getString(R.string.wifi), 0);
     }
 
+    /** Dark icon on the white focused pill. android:drawableTint needs API 23, so tint in code for Fire OS 5. */
+    private void tintIcons(TextView b) {
+        android.content.res.ColorStateList tint = getResources().getColorStateList(R.drawable.pill_text);
+        for (android.graphics.drawable.Drawable d : b.getCompoundDrawablesRelative())
+            if (d != null) d.mutate().setTintList(tint);
+    }
+
     private void setWifiPill(int icon, String label, int alertColor) {
         btnWifi.setCompoundDrawablesRelativeWithIntrinsicBounds(icon, 0, 0, 0);
+        tintIcons(btnWifi);
         btnWifi.setContentDescription(label);
         // Healthy: a round icon button like Inputs and Settings. Alert: a pill with the status text.
         boolean iconOnly = alertColor == 0;

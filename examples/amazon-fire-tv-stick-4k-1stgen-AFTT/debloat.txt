@@ -1,0 +1,37 @@
+# Amazon Fire TV Stick 4K (1st gen), model AFTT (tank), Fire OS 5.2.9.5 / Android 5.1.1 (API 22)
+# NOT APPLICABLE on this firmware: pm disable-user and pm hide are denied for the shell user, and
+# pm uninstall -k --user 0 reports Success/DELETE_FAILED_INTERNAL_ERROR but changes nothing
+# (dumpsys still shows installed=true). Needs root. Kept as a reference list only.
+# Amazon's launcher (com.amazon.tv.launcher) stays enabled: it hosts Settings.
+# Kept on purpose: Alexa voice/alerts, Prime Video.
+# Ads / shopping
+com.amazon.hybridadidservice
+com.amazon.kso.blackbird
+com.amazon.shoptv.client
+com.amazon.shoptv.firetv.client
+com.amazon.alexashopping
+com.amazon.device.sale.service
+com.amazon.minitv.android.app
+com.amazon.naatyam
+# Preloaded content / tutorials
+com.amazon.bueller.music
+com.amazon.bueller.photos
+com.amazon.gamehub
+com.imdb.livingroom.firetv
+com.amazon.imdb.tv.android.app
+com.amazon.storm.lightning.tutorial
+com.amazon.tmm.tutorial
+com.amazon.kor.demo
+com.amazon.tv.releasenotes
+# Telemetry / logging
+com.amazon.perfcollection
+com.amazon.dp.logger
+com.amazon.logan
+com.amazon.device.logmanager
+# Casting (Whispercast, fling receiver, DIAL)
+com.amazon.wcast.sink
+com.amazon.awvflingreceiver
+com.amazon.dialservice
+# Firmware updates
+com.amazon.tv.forcedotaupdater.v2
+com.amazon.device.software.ota

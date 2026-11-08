@@ -29,4 +29,10 @@
     <string name="move_right">Move Right</string>
     <string name="app_info">App Info</string>
     <string name="dock_full">Dock is full. Unpin an app first.</string>
+    <string name="saver_countdown">Screensaver in %1$d:%2$02d</string>
+    <string name="bt_turning_on">Turning Bluetooth on…</string>
+    <string name="bt_not_paired">%1$s isn\'t paired. Pair it in Settings → Controllers &amp; Bluetooth Devices.</string>
+    <string name="bt_connecting">Connecting %1$s…</string>
+    <string name="bt_disconnecting">Disconnecting %1$s…</string>
+    <string name="bt_failed">Couldn\'t switch %1$s</string>
 </resources>

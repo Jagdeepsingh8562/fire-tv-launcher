@@ -124,6 +124,9 @@ How it differs from Android TV:
   before you connect again.
 - **Some packages are protected.** Fire OS refuses to disable the four packages listed in the
   example debloat list. Undo the rest with `tools/restore.sh` and the same list.
+- **Old Fire OS 5 sticks (e.g. AFTT, Android 5.1)** block `pm disable`, `pm hide`, `pm uninstall` and the
+  accessibility Home redirect, so no debloat and Home keeps opening Amazon's screen. The launcher still
+  runs (minSdk 22), opens itself after boot (BootReceiver), shows its own photo-and-clock screen after 2 idle minutes (`IDLE_MS` in MainActivity; Amazon's screensaver can't be replaced) and is listed in Apps: open Apps & Games, highlight it, press Menu, choose Move to front.
 - **AirPlay has no screen of its own.** The AirPlay tile opens nothing, and casting from an iPhone
   works anyway.
 

@@ -167,7 +167,7 @@ public class AppAdapter extends RecyclerView.Adapter<AppAdapter.Holder> {
     boolean pin(String pkg) {
         if (pinned.contains(pkg)) return true;
         if (dockCount >= maxDock) return false;
-        pinned.removeIf(p -> positionOf(p) < 0);   // forget uninstalled pins so they don't hold slots
+        for (java.util.Iterator<String> it = pinned.iterator(); it.hasNext(); ) if (positionOf(it.next()) < 0) it.remove();   // forget uninstalled pins so they don't hold slots
         pinned.add(pkg);
         saveAndReload();
         return true;
