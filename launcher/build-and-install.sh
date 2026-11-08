@@ -4,7 +4,7 @@
 # Android TV / Google TV: sets the launcher as the default home and disables the stock launcher
 # (STOCK_LAUNCHER, default com.google.android.tvlauncher).
 # Fire TV: never touches Amazon's launcher, which also hosts Settings. Instead it turns on the
-# launcher's HomeRedirectService and its photo screensaver. See "Fire TV" in the README.
+# launcher's HomeRedirectService. See "Fire TV" in the README.
 set -euo pipefail
 cd "$(dirname "$0")"
 : "${TV_HOST:?set TV_HOST to the TV IP address, e.g. TV_HOST=192.168.1.50 $0}"
@@ -25,7 +25,7 @@ if [ "$MAKER" = "Amazon" ]; then
     "pm grant com.gathin.tvhome android.permission.WRITE_SECURE_SETTINGS" \
     "settings put secure enabled_accessibility_services com.gathin.tvhome/com.gathin.tvhome.HomeRedirectService" \
     "settings put secure accessibility_enabled 1" \
-    "settings put secure screensaver_components com.gathin.tvhome/com.gathin.tvhome.PhotoDream" \
+    "dpm set-active-admin com.gathin.tvhome/.AdminReceiver" \
     "am start -n com.gathin.tvhome/.MainActivity" \
     | "$PY" -I ../tools/tv.py --batch
   echo "Installed on Fire TV. Home opens the launcher. To go back to Amazon's home screen, press Menu on"

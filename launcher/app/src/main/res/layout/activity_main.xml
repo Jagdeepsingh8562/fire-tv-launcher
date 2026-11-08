@@ -5,18 +5,25 @@
     android:layout_height="match_parent"
     android:background="#FF000000">
 
-    <!-- Time-of-day photo, swapped in code. -->
-    <ImageView
-        android:id="@+id/bgPhoto"
+    <!-- Mountain scene drawn in code; palette follows the time of day. -->
+    <com.gathin.tvhome.MountainView
+        android:id="@+id/scene"
         android:layout_width="match_parent"
         android:layout_height="match_parent"
-        android:scaleType="centerCrop"
         android:importantForAccessibility="no" />
 
     <View
         android:layout_width="match_parent"
         android:layout_height="match_parent"
         android:background="@drawable/bg_scrim" />
+
+    <!-- Dims the scene while browsing the app grid, so tiles read clearly over the ridges. -->
+    <View
+        android:id="@+id/gridShade"
+        android:layout_width="match_parent"
+        android:layout_height="match_parent"
+        android:alpha="0"
+        android:background="#8C060A12" />
 
     <!-- Ambient glow in the colour of the focused dock app. -->
     <View
@@ -36,8 +43,8 @@
         android:paddingEnd="14dp"
         android:paddingTop="5dp"
         android:paddingBottom="6dp"
-        android:textColor="#F2FFFFFF"
-        android:textSize="12sp"
+        android:textColor="@color/snow"
+        android:textSize="14sp"
         android:fontFamily="@font/open_sans"
         android:fontVariationSettings="'wght' 500"
         android:singleLine="true" />
@@ -66,8 +73,8 @@
                     android:layout_width="wrap_content"
                     android:layout_height="wrap_content"
                     android:layout_marginStart="4dp"
-                    android:textColor="#8CFFFFFF"
-                    android:textSize="12sp"
+                    android:textColor="@color/amber"
+                    android:textSize="13sp"
                     android:fontFamily="@font/open_sans"
                     android:fontVariationSettings="'wght' 500"
                     android:letterSpacing="0.22"
@@ -85,8 +92,8 @@
                         android:layout_height="wrap_content"
                         android:format12Hour="h:mm"
                         android:format24Hour="HH:mm"
-                        android:textColor="#FFFFFFFF"
-                        android:textSize="52sp"
+                        android:textColor="@color/snow"
+                        android:textSize="60sp"
                         android:fontFamily="@font/open_sans"
                         android:fontVariationSettings="'wght' 300"
                         android:letterSpacing="-0.04"
@@ -101,8 +108,8 @@
                         android:layout_marginBottom="8dp"
                         android:format12Hour="a"
                         android:format24Hour=""
-                        android:textColor="#B3FFFFFF"
-                        android:textSize="15sp"
+                        android:textColor="@color/snow_dim"
+                        android:textSize="16sp"
                         android:fontFamily="@font/open_sans"
                         android:fontVariationSettings="'wght' 500"
                         android:letterSpacing="0.08"
@@ -125,8 +132,8 @@
                         android:layout_marginBottom="9dp"
                         android:format12Hour="EEEE  d MMMM"
                         android:format24Hour="EEEE  d MMMM"
-                        android:textColor="#A6FFFFFF"
-                        android:textSize="14sp"
+                        android:textColor="@color/snow_dim"
+                        android:textSize="15sp"
                         android:fontFamily="@font/open_sans"
                         android:fontVariationSettings="'wght' 400"
                         android:letterSpacing="0.14"
@@ -134,19 +141,6 @@
                 </LinearLayout>
             </LinearLayout>
 
-            <TextView
-                android:id="@+id/saverCountdown"
-                android:layout_width="wrap_content"
-                android:layout_height="wrap_content"
-                android:layout_below="@id/leftBlock"
-                android:layout_alignParentStart="true"
-                android:layout_marginStart="4dp"
-                android:layout_marginTop="4dp"
-                android:textColor="#73FFFFFF"
-                android:textSize="11sp"
-                android:fontFamily="@font/open_sans"
-                android:letterSpacing="0.12"
-                android:textAllCaps="true" />
 
             <LinearLayout
                 android:id="@+id/topButtons"
@@ -209,11 +203,22 @@
         </FrameLayout>
     </LinearLayout>
 
+    <!-- Power: bottom right, opens Sleep / Restart. -->
+    <TextView
+        android:id="@+id/btnPower"
+        style="@style/TopIconButton"
+        android:layout_gravity="bottom|end"
+        android:layout_marginEnd="56dp"
+        android:layout_marginBottom="34dp"
+        android:contentDescription="@string/power"
+        android:drawableStart="@drawable/ic_power"
+        android:nextFocusUp="@+id/btnSettings" />
+
     <!-- Dot under the focused dock icon, positioned in code. -->
     <View
         android:id="@+id/dockDot"
-        android:layout_width="4dp"
-        android:layout_height="4dp"
+        android:layout_width="12dp"
+        android:layout_height="7dp"
         android:alpha="0"
         android:background="@drawable/dock_dot" />
 

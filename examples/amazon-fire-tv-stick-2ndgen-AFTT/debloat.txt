@@ -1,4 +1,4 @@
-# Amazon Fire TV Stick 4K (1st gen), model AFTT (tank), Fire OS 5.2.9.5 / Android 5.1.1 (API 22)
+# Amazon Fire TV Stick (2nd gen), model AFTT (tank), Fire OS 5.2.9.5 / Android 5.1.1 (API 22)
 # NOT APPLICABLE on this firmware: pm disable-user and pm hide are denied for the shell user, and
 # pm uninstall -k --user 0 reports Success/DELETE_FAILED_INTERNAL_ERROR but changes nothing
 # (dumpsys still shows installed=true). Needs root. Kept as a reference list only.

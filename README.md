@@ -40,16 +40,20 @@ step with screenshots from the TV. If you'd rather do it by hand, the pieces are
 
 A small native Android TV home screen (`com.gathin.tvhome`), built for sets with 1 GB of RAM:
 
-- A full-screen photo that changes with the time of day: morning, afternoon, evening and night.
-  The greeting changes with it ("Good evening, Alex").
+- A mountain range drawn in code (no photos): dawn, day, dusk and a starry night with a crescent
+  moon, following the time of day. The ridges shift slightly as focus moves and sink when you
+  scroll the app grid. The greeting changes with it ("Good evening, Alex").
 - A macOS-style dock of up to four apps with square icons. The focused icon grows and lifts, its
   neighbours grow a little, and a capsule label shows its name. Press Down for the rest of your
   apps.
 - Pin, unpin and reorder dock apps on the TV: hold OK or press Menu on an app.
 - Round buttons top right: **Inputs** (HDMI ports, AV and Live TV), **Wi-Fi** (signal bars, plus a
-  warning when there is no internet) and **Settings**. Greeting, clock and date top left, set in
-  [Open Sans](https://fonts.google.com/specimen/Open+Sans).
-- A screensaver of the same photos with a slow zoom, a crossfade every 20 seconds and a clock.
+  warning when there is no internet), **Earphones** (connects or disconnects a paired Bluetooth
+  headset, `bt_device_name` in config.xml) and **Settings**. Greeting, clock and date top left, set
+  in [Outfit](https://fonts.google.com/specimen/Outfit). Focus is sunrise amber.
+- A power button bottom right: **Sleep** (needs the one-time
+  `adb shell dpm set-active-admin com.gathin.tvhome/.AdminReceiver`, which `build-and-install.sh` runs)
+  and **Restart…**, which opens Fire TV's My Fire TV screen.
 
 Configure it in [`launcher/app/src/main/res/values/config.xml`](launcher/app/src/main/res/values/config.xml):
 the starting dock, hidden apps, Live TV package and columns. To put your name in the greeting, add
@@ -99,14 +103,12 @@ tools/restore.sh examples/xiaomi-mi-tv-4a/debloat.txt        # undo it, restore 
 Fire OS is Android underneath, but it guards its home screen. Tested on a Hisense Fire TV Edition
 (Fire OS 8, Android 11, model AFTOLCBC82).
 
-![Amazon screensaver (top) and the launcher's screensaver (bottom)](docs/firetv-screensaver-before-after.jpg)
-
 To set it up:
 
 1. On the TV, open **Settings → Device & Software → About**, select the device name seven times,
    then go back to **Developer Options** and turn on **ADB debugging**.
-2. Run `TV_HOST=<tv ip> launcher/build-and-install.sh`. On Fire TV it installs the launcher, turns
-   on its Home redirect and sets its screensaver. It leaves Amazon's launcher alone.
+2. Run `TV_HOST=<tv ip> launcher/build-and-install.sh`. On Fire TV it installs the launcher and
+   turns on its Home redirect. It leaves Amazon's launcher alone.
 3. Optional: disable the ad and telemetry packages with
    `tools/disable.sh examples/hisense-fire-tv-AFTOLCBC82/debloat.txt`.
 
@@ -126,7 +128,7 @@ How it differs from Android TV:
   example debloat list. Undo the rest with `tools/restore.sh` and the same list.
 - **Old Fire OS 5 sticks (e.g. AFTT, Android 5.1)** block `pm disable`, `pm hide`, `pm uninstall` and the
   accessibility Home redirect, so no debloat and Home keeps opening Amazon's screen. The launcher still
-  runs (minSdk 22), opens itself after boot (BootReceiver), shows its own photo-and-clock screen after 2 idle minutes (`IDLE_MS` in MainActivity; Amazon's screensaver can't be replaced) and is listed in Apps: open Apps & Games, highlight it, press Menu, choose Move to front.
+  runs (minSdk 22) and opens itself after boot (BootReceiver) and is listed in Apps: open Apps & Games, highlight it, press Menu, choose Move to front.
 - **AirPlay has no screen of its own.** The AirPlay tile opens nothing, and casting from an iPhone
   works anyway.
 
@@ -144,4 +146,4 @@ Add your TV's debloat list, improve the launcher, or sharpen the prompt. See
 ## Licence
 
 MIT, see [`LICENSE`](LICENSE). The Outfit and Open Sans typefaces are under the SIL Open Font
-License, see `launcher/FONT-LICENSE-OFL.txt`. Photo credits are in [`CREDITS.md`](CREDITS.md).
+License, see `launcher/FONT-LICENSE-OFL.txt`. Credits are in [`CREDITS.md`](CREDITS.md).

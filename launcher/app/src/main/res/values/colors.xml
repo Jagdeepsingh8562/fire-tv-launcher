@@ -1,0 +1,11 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Summit theme: alpine night slate, snow white text, sunrise amber for focus. -->
+<resources>
+    <color name="snow">#FFF4F1EA</color>
+    <color name="snow_dim">#B3F4F1EA</color>
+    <color name="snow_faint">#73F4F1EA</color>
+    <color name="amber">#FFF5B451</color>
+    <color name="slate">#FF0F1724</color>
+    <color name="slate_glass">#CC0F1724</color>
+    <color name="hairline">#33F4F1EA</color>
+</resources>

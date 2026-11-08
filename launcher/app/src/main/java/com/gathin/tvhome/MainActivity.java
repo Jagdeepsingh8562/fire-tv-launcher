@@ -19,7 +19,6 @@ import android.net.wifi.WifiInfo;
 import android.net.wifi.WifiManager;
 import android.net.Uri;
 import android.os.Bundle;
-import android.os.SystemClock;
 import android.os.Handler;
 import android.os.Looper;
 import android.provider.Settings;
@@ -79,8 +78,9 @@ public class MainActivity extends Activity implements AppAdapter.TileListener {
     private int ambientColor;
     private boolean heroShown;
     private TextView greeting;
-    private ImageView bgPhoto;
-    private int bgRes;
+    private MountainView scene;
+    private View gridShade;
+    private boolean shadeOn;
     private TextView btnWifi;
     private BudsToggle buds;
     private SpringAnimation springX, springY;
@@ -104,27 +104,6 @@ public class MainActivity extends Activity implements AppAdapter.TileListener {
             handler.post(MainActivity.this::updateWifiLabel);
         }
     };
-    // Idle photo screen. Kept shorter than Amazon's own screensaver timer (5 min) so ours is the one you see.
-    private static final long IDLE_MS = 2 * 60_000;
-    private SaverView saver;
-    private TextView saverCountdown;
-    private long saverDueAt;
-    // Counts down to the photo screen; one setText a second, only while the launcher is in front.
-    private final Runnable countdownTick = new Runnable() {
-        @Override
-        public void run() {
-            long left = Math.max(0, (saverDueAt - SystemClock.uptimeMillis() + 999) / 1000);
-            saverCountdown.setText(getString(R.string.saver_countdown, left / 60, left % 60));
-            if (left > 0) handler.postDelayed(this, 1000);
-        }
-    };
-    private final Runnable showSaver = () -> {
-        if (saver != null) return;
-        handler.removeCallbacks(countdownTick);
-        saver = new SaverView(this);
-        ((ViewGroup) findViewById(android.R.id.content)).addView(saver);
-        saver.start();
-    };
     private final Runnable minuteTick = new Runnable() {
         @Override
         public void run() {
@@ -139,7 +118,6 @@ public class MainActivity extends Activity implements AppAdapter.TileListener {
     protected void onCreate(Bundle savedInstanceState) {
         super.onCreate(savedInstanceState);
         setContentView(R.layout.activity_main);
-        saverCountdown = findViewById(R.id.saverCountdown);
         density = getResources().getDisplayMetrics().density;
         COLUMNS = Math.max(1, getResources().getInteger(R.integer.columns));
         liveTvPkg = getString(R.string.live_tv_package).trim();
@@ -156,8 +134,10 @@ public class MainActivity extends Activity implements AppAdapter.TileListener {
         ambient.addOnLayoutChangeListener((v, l, t, r, b, ol, ot, or, ob) ->
                 ambientGlow.setGradientRadius((r - l) * 0.62f));
         greeting = findViewById(R.id.greeting);
-        bgPhoto = findViewById(R.id.bgPhoto);
+        scene = findViewById(R.id.scene);
+        gridShade = findViewById(R.id.gridShade);
         btnWifi = findViewById(R.id.btnWifi);
+        applyFonts();
 
         grid = findViewById(R.id.grid);
         // One span unit per cell of any dock size 1..COLUMNS: the dock row splits evenly, grid rows are COLUMNS wide.
@@ -193,6 +173,7 @@ public class MainActivity extends Activity implements AppAdapter.TileListener {
         grid.addOnScrollListener(new RecyclerView.OnScrollListener() {
             @Override
             public void onScrolled(@NonNull RecyclerView rv, int dx, int dy) {
+                scene.setScroll(rv.computeVerticalScrollOffset());
                 if (!glassShown) return;
                 glassTargetY -= dy;
                 if (springY.isRunning()) springY.animateToFinalPosition(glassTargetY);
@@ -238,6 +219,12 @@ public class MainActivity extends Activity implements AppAdapter.TileListener {
             btnBt.setCompoundDrawablesRelativeWithIntrinsicBounds(icon, 0, 0, 0);
             tintIcons(btnBt);
         });
+        TextView btnPower = findViewById(R.id.btnPower);
+        tintIcons(btnPower);
+        btnPower.setOnClickListener(v -> showPowerMenu(v));
+        // Bottom-right corner: Right and Down lead nowhere, Up goes to Settings (nextFocusUp in the layout).
+        btnPower.setOnKeyListener((v, keyCode, event) -> event.getAction() == KeyEvent.ACTION_DOWN
+                && (keyCode == KeyEvent.KEYCODE_DPAD_RIGHT || keyCode == KeyEvent.KEYCODE_DPAD_DOWN));
         btnInputs.setOnKeyListener(pillKeys);
         btnWifi.setOnKeyListener(pillKeys);
         btnSettings.setOnKeyListener(pillKeys);
@@ -246,10 +233,17 @@ public class MainActivity extends Activity implements AppAdapter.TileListener {
         getWindow().getDecorView().getViewTreeObserver().addOnGlobalFocusChangeListener((oldF, newF) -> {
             boolean onTile = newF != null && newF.getId() == R.id.card;
             if (!onTile) {
+                setShade(false);
                 hideGlass();
                 hideHero();
             }
         });
+    }
+
+    @Override
+    protected void onNewIntent(Intent intent) {
+        super.onNewIntent(intent);
+        setIntent(intent);
     }
 
     @Override
@@ -267,7 +261,6 @@ public class MainActivity extends Activity implements AppAdapter.TileListener {
         updateBackground();
         updateWifiLabel();
         handler.postDelayed(minuteTick, MINUTE_MS);
-        restartIdle();
         buds.resume();
         ConnectivityManager cm = (ConnectivityManager) getSystemService(CONNECTIVITY_SERVICE);
         if (cm != null) cm.registerNetworkCallback(new android.net.NetworkRequest.Builder().build(), networkCallback);
@@ -280,38 +273,9 @@ public class MainActivity extends Activity implements AppAdapter.TileListener {
         });
     }
 
-    private void restartIdle() {
-        handler.removeCallbacks(showSaver);
-        handler.removeCallbacks(countdownTick);
-        saverDueAt = SystemClock.uptimeMillis() + IDLE_MS;
-        handler.postDelayed(showSaver, IDLE_MS);
-        countdownTick.run();
-    }
-
-    private void hideSaver() {
-        if (saver == null) return;
-        saver.stop();
-        ((ViewGroup) saver.getParent()).removeView(saver);
-        saver = null;
-    }
-
-    /** Any button hides the photo screen (and is swallowed) and restarts the idle countdown. */
-    @Override
-    public boolean dispatchKeyEvent(KeyEvent e) {
-        restartIdle();
-        if (saver != null) {
-            if (e.getAction() == KeyEvent.ACTION_DOWN) hideSaver();
-            return true;
-        }
-        return super.dispatchKeyEvent(e);
-    }
-
     @Override
     protected void onPause() {
         buds.pause();
-        handler.removeCallbacks(showSaver);
-        handler.removeCallbacks(countdownTick);
-        hideSaver();
         super.onPause();
         handler.removeCallbacks(minuteTick);
         ConnectivityManager cm = (ConnectivityManager) getSystemService(CONNECTIVITY_SERVICE);
@@ -333,6 +297,7 @@ public class MainActivity extends Activity implements AppAdapter.TileListener {
             return;
         }
         magnifyDock(-1);
+        followFocus(card, true);
         // Tile rect in root coordinates, using layout positions (ignores the scale animation).
         Rect r = new Rect(0, 0, card.getWidth(), card.getHeight());
         root.offsetDescendantRectToMyCoords(card, r);
@@ -378,6 +343,7 @@ public class MainActivity extends Activity implements AppAdapter.TileListener {
         int dy = decoratedTop - grid.getPaddingTop();
         if (Math.abs(dy) > 1) grid.smoothScrollBy(0, dy);
         magnifyDock(position);
+        followFocus(card, false);
         Rect r = new Rect(0, 0, card.getWidth(), card.getHeight());
         root.offsetDescendantRectToMyCoords(card, r);
         r.offset(0, -dy);
@@ -571,6 +537,43 @@ public class MainActivity extends Activity implements AppAdapter.TileListener {
         rows.getChildAt(0).requestFocus();
     }
 
+    /** Small menu above the power button: Sleep, and Restart (Fire OS only lets its own apps reboot). */
+    private void showPowerMenu(View anchor) {
+        View panel = getLayoutInflater().inflate(R.layout.popup_inputs, root, false);
+        LinearLayout rows = panel.findViewById(R.id.rows);
+        int width = (int) (190 * density);
+        final PopupWindow popup = new PopupWindow(panel, width, ViewGroup.LayoutParams.WRAP_CONTENT, true);
+        popup.setBackgroundDrawable(new ColorDrawable(Color.TRANSPARENT));
+        popup.setOutsideTouchable(true);
+        popup.setAnimationStyle(0);
+        popup.setElevation(0f);
+        addInputRow(rows, popup, R.drawable.ic_sleep, getString(R.string.sleep), -1, this::sleepNow);
+        addInputRow(rows, popup, R.drawable.ic_restart, getString(R.string.restart), -1, () ->
+                open(new Intent().setClassName("com.amazon.tv.settings.v2",
+                        "com.amazon.tv.settings.v2.tv.device.DeviceActivity")));
+        panel.measure(View.MeasureSpec.makeMeasureSpec(width, View.MeasureSpec.EXACTLY), View.MeasureSpec.UNSPECIFIED);
+        Rect r = new Rect(0, 0, anchor.getWidth(), anchor.getHeight());
+        root.offsetDescendantRectToMyCoords(anchor, r);
+        panel.setAlpha(0f);
+        panel.setTranslationY(8 * density);
+        popup.showAtLocation(root, Gravity.NO_GRAVITY, r.right - width,
+                (int) (r.top - 10 * density - panel.getMeasuredHeight()));
+        panel.animate().alpha(1f).translationY(0f).setDuration(200)
+                .setInterpolator(new DecelerateInterpolator(1.6f)).start();
+        rows.getChildAt(0).requestFocus();
+    }
+
+    private void sleepNow() {
+        android.app.admin.DevicePolicyManager dpm =
+                (android.app.admin.DevicePolicyManager) getSystemService(DEVICE_POLICY_SERVICE);
+        android.content.ComponentName admin = new android.content.ComponentName(this, AdminReceiver.class);
+        if (dpm != null && dpm.isAdminActive(admin)) {
+            dpm.lockNow();
+            return;
+        }
+        Toast.makeText(this, R.string.sleep_needs_admin, Toast.LENGTH_LONG).show();
+    }
+
     /** After the dock changes, focus the app's new tile once the grid has re-laid out. */
     private void focusAfterLayout(String pkg) {
         hideHero();
@@ -617,11 +620,9 @@ public class MainActivity extends Activity implements AppAdapter.TileListener {
 
     // ---- top bar ---------------------------------------------------------------------------------
 
-    // Morning 5-12, afternoon 12-17, evening 17-22, night 22-5. Indexes GREETINGS and BACKGROUNDS.
+    // Morning 5-12, afternoon 12-17, evening 17-22, night 22-5. Indexes GREETINGS and MountainView palettes.
     private static final int[] GREETINGS = {
             R.string.good_morning, R.string.good_afternoon, R.string.good_evening, R.string.good_night};
-    private static final int[] BACKGROUNDS = {
-            R.drawable.bg_morning, R.drawable.bg_afternoon, R.drawable.bg_evening, R.drawable.bg_night};
 
     private static int dayPart() {
         int hour = Calendar.getInstance().get(Calendar.HOUR_OF_DAY);
@@ -639,19 +640,32 @@ public class MainActivity extends Activity implements AppAdapter.TileListener {
     }
 
     private void updateBackground() {
-        int res = BACKGROUNDS[dayPart()];
-        if (res == bgRes) return;
-        boolean first = bgRes == 0;
-        bgRes = res;
-        if (first) {
-            bgPhoto.setImageResource(res);
-            return;
-        }
-        // Fade through black so the swap isn't a jump cut.
-        bgPhoto.animate().alpha(0f).setDuration(600).withEndAction(() -> {
-            bgPhoto.setImageResource(res);
-            bgPhoto.animate().alpha(1f).setDuration(900);
-        });
+        // Test hook: adb shell am start -n com.gathin.tvhome/.MainActivity --ei dayPart 0..3
+        int forced = getIntent().getIntExtra("dayPart", -1);
+        scene.setDayPart(forced >= 0 && forced <= 3 ? forced : dayPart());
+    }
+
+    private void applyFonts() {
+        ((TextView) findViewById(R.id.greeting)).setTypeface(Fonts.semibold(this));
+        ((TextView) findViewById(R.id.clock)).setTypeface(Fonts.light(this));
+        ((TextView) findViewById(R.id.ampm)).setTypeface(Fonts.medium(this));
+        ((TextView) findViewById(R.id.date)).setTypeface(Fonts.regular(this));
+        heroName.setTypeface(Fonts.medium(this));
+        btnWifi.setTypeface(Fonts.medium(this));
+    }
+
+    /** Parallax from the focused card's horizontal position, and the grid shade on or off. */
+    private void followFocus(View card, boolean inGrid) {
+        Rect r = new Rect(0, 0, card.getWidth(), card.getHeight());
+        root.offsetDescendantRectToMyCoords(card, r);
+        if (root.getWidth() > 0) scene.setParallax(r.exactCenterX() / root.getWidth() * 2f - 1f);
+        setShade(inGrid);
+    }
+
+    private void setShade(boolean on) {
+        if (on == shadeOn) return;
+        shadeOn = on;
+        gridShade.animate().alpha(on ? 1f : 0f).setDuration(on ? 320 : 240).start();
     }
 
     /** Shows the Wi-Fi network name on the button when we can read it, otherwise the connection type. */
@@ -787,8 +801,11 @@ public class MainActivity extends Activity implements AppAdapter.TileListener {
     private void addInputRow(LinearLayout rows, PopupWindow popup, int iconRes, String title, int state, Runnable action) {
         View row = getLayoutInflater().inflate(R.layout.item_input, rows, false);
         ((ImageView) row.findViewById(R.id.icon)).setImageResource(iconRes);
-        ((TextView) row.findViewById(R.id.title)).setText(title);
+        TextView titleView = row.findViewById(R.id.title);
+        titleView.setText(title);
+        titleView.setTypeface(Fonts.medium(this));
         TextView status = row.findViewById(R.id.status);
+        status.setTypeface(Fonts.regular(this));
         View dot = row.findViewById(R.id.dot);
         // This TV reports "standby" for every port whether or not something is plugged in, so only
         // definite states are shown.

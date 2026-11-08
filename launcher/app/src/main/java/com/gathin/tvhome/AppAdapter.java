@@ -50,31 +50,45 @@ public class AppAdapter extends RecyclerView.Adapter<AppAdapter.Holder> {
         void onTileMenu(int position, View card);
     }
 
-    // Optional square icons, drawn locally by tools/make_dock_icons.py and kept out of git (they are trademarked
-    // logos). Looked up by name so the app builds without them; missing ones fall back to the app's own icon.
-    private static final Map<String, String> DOCK_ICONS = new HashMap<>();
+    // Summit theme: every tile is the same slate square with one snow-white mark. A glyph for apps we know, a
+    // letter (or short word) for the rest. Generic shapes only, no brand logos.
+    private static final Map<String, Integer> GLYPHS = new HashMap<>();
+    private static final Map<String, String> LETTERS = new HashMap<>();
+    private static final Map<String, String> LABELS = new HashMap<>();
     static {
-        DOCK_ICONS.put("com.amazon.firetv.youtube", "dock_youtube");
-        DOCK_ICONS.put("com.netflix.ninja", "dock_netflix");
-        DOCK_ICONS.put("com.amazon.firebat", "dock_prime");
-        DOCK_ICONS.put("com.apple.airplay.amazon.airplay", "dock_airplay");
+        GLYPHS.put("org.smarttube.stable", R.drawable.glyph_play);
+        GLYPHS.put("com.amazon.firetv.youtube", R.drawable.glyph_play);
+        GLYPHS.put("in.startv.hotstar", R.drawable.glyph_star);
+        GLYPHS.put("com.amazon.firebat", R.drawable.glyph_smile);
+        GLYPHS.put("com.jio.media.stb.ondemand", R.drawable.glyph_film);
+        GLYPHS.put("com.azone.firemusic", R.drawable.glyph_music);
+        GLYPHS.put("io.github.visnkmr.wirelessexplorer", R.drawable.glyph_folder);
+        GLYPHS.put("io.github.visnkmr.bapl", R.drawable.glyph_pulse);
+        LETTERS.put("com.netflix.ninja", "N");
+        LETTERS.put("com.apple.atve.amazon.appletv", "tv");
+        LABELS.put("org.smarttube.stable", "YouTube");   // SmartTube is this TV's YouTube
     }
+    private static final int GLYPH_COLOR = 0xFFF4F1EA;
 
     static final class Entry {
         final String label;
         final ComponentName component;
         final String pkg;
-        /** Square dock art, or null: then the app's own icon sits on a graphite tile. */
-        final Drawable square;
+        /** The app's own icon: only sampled for the ambient glow colour, never shown. */
         final Drawable icon;
+        final int glyph;
+        final String letter;
         int ambient;
 
-        Entry(String label, ComponentName component, Drawable square, Drawable icon) {
+        Entry(String label, ComponentName component, Drawable icon) {
             this.label = label;
             this.component = component;
             this.pkg = component.getPackageName();
-            this.square = square;
             this.icon = icon;
+            Integer g = GLYPHS.get(pkg);
+            this.glyph = g != null ? g : 0;
+            String l = LETTERS.get(pkg);
+            this.letter = l != null ? l : label.isEmpty() ? "?" : label.substring(0, 1).toUpperCase();
         }
     }
 
@@ -120,12 +134,8 @@ public class AppAdapter extends RecyclerView.Adapter<AppAdapter.Holder> {
             if (mainComponent != null && !mainComponent.getClassName().equals(ri.activityInfo.name)) continue;
             if (!seen.add(pkg)) continue;
             Drawable icon = ri.loadIcon(pm);
-            String label = String.valueOf(ri.loadLabel(pm));
-            String squareName = DOCK_ICONS.get(pkg);
-            int square = squareName == null ? 0
-                    : ctx.getResources().getIdentifier(squareName, "drawable", ctx.getPackageName());
-            fresh.add(new Entry(label, new ComponentName(pkg, ri.activityInfo.name),
-                    square != 0 ? ctx.getDrawable(square) : null, icon));
+            String label = LABELS.containsKey(pkg) ? LABELS.get(pkg) : String.valueOf(ri.loadLabel(pm));
+            fresh.add(new Entry(label, new ComponentName(pkg, ri.activityInfo.name), icon));
         }
         Collections.sort(fresh, (a, b) -> {
             int fa = pinned.indexOf(a.pkg), fb = pinned.indexOf(b.pkg);
@@ -213,13 +223,17 @@ public class AppAdapter extends RecyclerView.Adapter<AppAdapter.Holder> {
         h.shadow.setScaleX(1f);
         h.shadow.setScaleY(1f);
         h.shadow.setTranslationY(0f);
-        h.label.setVisibility(View.GONE);
-        boolean art = e.square != null;
-        h.card.setBackground(art ? null : ctx.getDrawable(R.drawable.dock_tile_bg));
-        h.banner.setImageDrawable(e.square);
-        h.banner.setVisibility(art ? View.VISIBLE : View.GONE);
-        h.icon.setImageDrawable(art ? null : e.icon);
-        h.icon.setVisibility(art ? View.GONE : View.VISIBLE);
+        h.card.setBackground(ctx.getDrawable(R.drawable.dock_tile_bg));
+        h.banner.setVisibility(View.GONE);
+        boolean glyph = e.glyph != 0;
+        if (glyph) {
+            h.icon.setImageResource(e.glyph);
+            h.icon.setColorFilter(GLYPH_COLOR);
+        }
+        h.icon.setVisibility(glyph ? View.VISIBLE : View.GONE);
+        h.label.setText(e.letter);
+        h.label.setTextSize(android.util.TypedValue.COMPLEX_UNIT_SP, e.letter.length() > 1 ? 19 : 24);
+        h.label.setVisibility(glyph ? View.GONE : View.VISIBLE);
         h.card.setOnClickListener(v -> launch(e));
         h.card.setOnLongClickListener(v -> {
             int pos = h.getBindingAdapterPosition();
@@ -253,7 +267,7 @@ public class AppAdapter extends RecyclerView.Adapter<AppAdapter.Holder> {
     int ambientColorAt(int position) {
         if (position < 0 || position >= items.size()) return 0xFF444444;
         Entry e = items.get(position);
-        if (e.ambient == 0) e.ambient = vividColor(e.square != null ? e.square : e.icon);
+        if (e.ambient == 0) e.ambient = vividColor(e.icon);
         return e.ambient;
     }
 
@@ -315,6 +329,8 @@ public class AppAdapter extends RecyclerView.Adapter<AppAdapter.Holder> {
             icon = v.findViewById(R.id.icon);
             label = v.findViewById(R.id.label);
             name = v.findViewById(R.id.name);
+            name.setTypeface(Fonts.medium(v.getContext()));
+            label.setTypeface(Fonts.semibold(v.getContext()));
 
             final float density = v.getResources().getDisplayMetrics().density;
             card.setOutlineProvider(new ViewOutlineProvider() {
