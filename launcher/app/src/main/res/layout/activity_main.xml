@@ -178,6 +178,13 @@
                     android:contentDescription="@string/settings"
                     android:drawableStart="@drawable/ic_settings"
                     android:nextFocusDown="@+id/grid" />
+
+                <TextView
+                    android:id="@+id/btnPower"
+                    style="@style/TopIconButton"
+                    android:contentDescription="@string/power"
+                    android:drawableStart="@drawable/ic_power"
+                    android:nextFocusDown="@+id/grid" />
             </LinearLayout>
 
             <!-- Wallpaper name, right-aligned under the buttons. -->
@@ -217,17 +224,6 @@
                 android:descendantFocusability="afterDescendants" />
         </FrameLayout>
     </LinearLayout>
-
-    <!-- Power: bottom right, opens Sleep / Restart. -->
-    <TextView
-        android:id="@+id/btnPower"
-        style="@style/TopIconButton"
-        android:layout_gravity="bottom|end"
-        android:layout_marginEnd="40dp"
-        android:layout_marginBottom="57dp"
-        android:contentDescription="@string/power"
-        android:drawableStart="@drawable/ic_power"
-        android:nextFocusUp="@+id/btnSettings" />
 
     <!-- The single floating glass highlight that springs between tiles. -->
     <com.gathin.tvhome.GlassView

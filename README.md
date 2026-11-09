@@ -50,7 +50,7 @@ A small native Android TV home screen (`com.gathin.tvhome`), built for sets with
   the TV's IP address), **Earphones** (connects or disconnects a paired Bluetooth headset,
   `bt_device_name` in config.xml) and **Settings**. Greeting, clock and date top left, set in
   [Outfit](https://fonts.google.com/specimen/Outfit).
-- A power button bottom right: **Sleep** (needs the one-time
+- A power button at the right end of the top buttons: **Sleep** (needs the one-time
   `adb shell dpm set-active-admin com.gathin.tvhome/.AdminReceiver`, which `build-and-install.sh` runs)
   and **Restart…**, which opens Fire TV's My Fire TV screen.
 

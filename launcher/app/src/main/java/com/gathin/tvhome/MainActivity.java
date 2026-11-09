@@ -223,7 +223,7 @@ public class MainActivity extends Activity implements AppAdapter.TileListener {
                 return true;
             }
             if (keyCode == KeyEvent.KEYCODE_DPAD_LEFT && v.getId() == R.id.btnWifi) return true;
-            return keyCode == KeyEvent.KEYCODE_DPAD_RIGHT && v.getId() == R.id.btnSettings;
+            return keyCode == KeyEvent.KEYCODE_DPAD_RIGHT && v.getId() == R.id.btnPower;
         };
         tintIcons((TextView) btnSettings);
         TextView btnBt = findViewById(R.id.btnBt);
@@ -236,9 +236,7 @@ public class MainActivity extends Activity implements AppAdapter.TileListener {
         TextView btnPower = findViewById(R.id.btnPower);
         tintIcons(btnPower);
         btnPower.setOnClickListener(v -> showPowerMenu(v));
-        // Bottom-right corner: Right and Down lead nowhere, Up goes to Settings (nextFocusUp in the layout).
-        btnPower.setOnKeyListener((v, keyCode, event) -> event.getAction() == KeyEvent.ACTION_DOWN
-                && (keyCode == KeyEvent.KEYCODE_DPAD_RIGHT || keyCode == KeyEvent.KEYCODE_DPAD_DOWN));
+        btnPower.setOnKeyListener(pillKeys);
         btnWifi.setOnKeyListener(pillKeys);
         btnSettings.setOnKeyListener(pillKeys);
 
@@ -505,7 +503,7 @@ public class MainActivity extends Activity implements AppAdapter.TileListener {
         rows.getChildAt(0).requestFocus();
     }
 
-    /** Small menu above the power button: Sleep, and Restart (Fire OS only lets its own apps reboot). */
+    /** Small menu under the power button: Sleep, and Restart (Fire OS only lets its own apps reboot). */
     private void showPowerMenu(View anchor) {
         View panel = getLayoutInflater().inflate(R.layout.popup_inputs, root, false);
         LinearLayout rows = panel.findViewById(R.id.rows);
@@ -519,13 +517,9 @@ public class MainActivity extends Activity implements AppAdapter.TileListener {
         addInputRow(rows, popup, R.drawable.ic_restart, getString(R.string.restart), -1, () ->
                 open(new Intent().setClassName("com.amazon.tv.settings.v2",
                         "com.amazon.tv.settings.v2.tv.device.DeviceActivity")));
-        panel.measure(View.MeasureSpec.makeMeasureSpec(width, View.MeasureSpec.EXACTLY), View.MeasureSpec.UNSPECIFIED);
-        Rect r = new Rect(0, 0, anchor.getWidth(), anchor.getHeight());
-        root.offsetDescendantRectToMyCoords(anchor, r);
         panel.setAlpha(0f);
-        panel.setTranslationY(8 * density);
-        popup.showAtLocation(root, Gravity.NO_GRAVITY, r.right - width,
-                (int) (r.top - 10 * density - panel.getMeasuredHeight()));
+        panel.setTranslationY(-8 * density);
+        popup.showAsDropDown(anchor, anchor.getWidth() - width, (int) (10 * density), Gravity.START);
         panel.animate().alpha(1f).translationY(0f).setDuration(200)
                 .setInterpolator(new DecelerateInterpolator(1.6f)).start();
         rows.getChildAt(0).requestFocus();
