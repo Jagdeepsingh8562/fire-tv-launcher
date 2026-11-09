@@ -10,6 +10,8 @@
     <uses-permission android:name="android.permission.RECEIVE_BOOT_COMPLETED" />
     <uses-permission android:name="android.permission.BLUETOOTH" />
     <uses-permission android:name="android.permission.BLUETOOTH_ADMIN" />
+    <!-- Stops background apps before another one opens, to give it their memory. -->
+    <uses-permission android:name="android.permission.KILL_BACKGROUND_PROCESSES" />
     <!-- Lets the launcher turn its Home redirect on and off from the TV; granted over adb (pm grant). -->
     <uses-permission android:name="android.permission.WRITE_SECURE_SETTINGS" />
 

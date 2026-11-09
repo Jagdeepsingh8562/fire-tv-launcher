@@ -33,6 +33,9 @@ Open `http://<this computer's address>:5400` on a phone on the same Wi-Fi and ad
   needed (the phone shows each step). JioHotstar has none: pick your profile on the TV and tap **Search** on
   the phone. Do not use the `profile` keys for an account with a single profile and no "Who's watching?". The other apps open on their home page and the
   phone says what to search for. Add an app or a search link in `APPS`.
+- **Memory:** the stick has ~900 MB, so before any app opens from here (Ask, an app button, a search) the
+  server runs `am kill-all` and force-stops the other apps in `APPS`, plus Prime's player. The **Free memory**
+  button does the same on demand, keeps the app on screen, and shows the memory available before and after.
 - **No password:** anyone on your Wi-Fi can use it, like the TV remote on the table. Never forward a port
   to it. Put guests on a guest network.
 - `python3 phone-remote/server.py --selftest` checks that the model's answer cannot open anything else, and the

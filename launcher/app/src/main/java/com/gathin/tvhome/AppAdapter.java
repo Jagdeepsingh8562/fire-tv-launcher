@@ -1,5 +1,6 @@
 package com.gathin.tvhome;
 
+import android.app.ActivityManager;
 import android.content.ComponentName;
 import android.content.Context;
 import android.content.Intent;
@@ -251,11 +252,25 @@ public class AppAdapter extends RecyclerView.Adapter<AppAdapter.Holder> {
                 .setComponent(e.component)
                 .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK | Intent.FLAG_ACTIVITY_RESET_TASK_IF_NEEDED);
         RecentApps.record(ctx, e.pkg);
+        freeMemoryFor(e.pkg);
         try {
             ctx.startActivity(i);
         } catch (Exception ex) {
             Toast.makeText(ctx, "Can't open " + e.label, Toast.LENGTH_SHORT).show();
         }
+    }
+
+    /**
+     * The stick has ~900 MB and an app opening while others sit in the background is slow, so the others are
+     * stopped first. Only background processes die: anything playing (a foreground service) stays.
+     */
+    private void freeMemoryFor(String keep) {
+        ActivityManager am = (ActivityManager) ctx.getSystemService(Context.ACTIVITY_SERVICE);
+        for (Entry other : items) {
+            if (!other.pkg.equals(keep)) am.killBackgroundProcesses(other.pkg);
+        }
+        // Prime Video's player is a second package that has no tile of its own (~96 MB left behind).
+        if (!keep.equals("com.amazon.firebat")) am.killBackgroundProcesses("com.amazon.avod");
     }
 
     @Override

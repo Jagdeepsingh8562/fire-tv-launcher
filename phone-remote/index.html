@@ -72,6 +72,7 @@
     <button data-key="sleep">Sleep</button>
     <button data-key="wake">Wake</button>
   </div>
+  <button id="free">Free memory</button>
 
   <form class="type glass" id="typeForm">
     <input id="t" placeholder="Type into the TV's search box" autocomplete="off" enterkeyhint="send">
@@ -132,6 +133,16 @@
       if (!st.busy) clearInterval(poll);
     }, 1500);
   }
+
+  // Stops the apps left in the background (not the one on screen), so the one you open next runs better.
+  document.getElementById('free').addEventListener('click', async e => {
+    buzz();
+    const b = e.currentTarget;
+    b.disabled = true; say.textContent = 'Freeing memory…';
+    const r = await post('/api/free', {});
+    say.textContent = r.say || r.error || '';
+    b.disabled = false;
+  });
 
   document.getElementById('typeForm').addEventListener('submit', async e => {
     e.preventDefault();

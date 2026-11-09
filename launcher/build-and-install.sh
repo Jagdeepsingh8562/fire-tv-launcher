@@ -27,6 +27,9 @@ if [ "$MAKER" = "Amazon" ]; then
     "settings put secure accessibility_enabled 1" \
     "dpm set-active-admin com.gathin.tvhome/.AdminReceiver" \
     "settings put secure enabled_notification_listeners com.gathin.tvhome/com.gathin.tvhome.MediaWatcherService" \
+    "settings put global window_animation_scale 0.5" \
+    "settings put global transition_animation_scale 0.5" \
+    "settings put global animator_duration_scale 0.5" \
     "am start -n com.gathin.tvhome/.MainActivity" \
     | "$PY" -I ../tools/tv.py --batch
   echo "Installed on Fire TV. Home opens the launcher. To go back to Amazon's home screen, press Menu on"

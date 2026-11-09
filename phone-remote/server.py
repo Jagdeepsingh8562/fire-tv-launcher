@@ -196,6 +196,52 @@ def restart(package):
     launch(package)
 
 
+# This stick has 895 MB and about 450 MB of it is Amazon's own services, which cannot be removed without root.
+# The memory we can free is apps left in the background (Prime's player alone is ~96 MB), and an app that
+# opens while others linger is slow and laggy. So before one opens, every other app of ours is stopped.
+SAME_APP = [{"com.amazon.firebat", "com.amazon.avod"}]   # Prime's screens and its player are two packages
+LAUNCHER = "com.gathin.tvhome"
+
+
+def free_command(keep=None):
+    """Shell line that drops cached background processes and stops every app in APPS except `keep`."""
+    spare = {keep}.union(*[g for g in SAME_APP if keep in g])
+    pkgs = {a["package"] for a in APPS}.union(*SAME_APP) - spare
+    return "; ".join(["am kill-all", *[f"am force-stop {p}" for p in sorted(pkgs)]])
+
+
+def free_memory(keep=None):
+    """Best effort: a failure here must not stop the app from opening."""
+    try:
+        adb(free_command(keep), timeout=15)
+    except Exception as e:
+        log(f"free_memory failed: {e}")
+
+
+def top_package(dump):
+    """The package of the app on screen, from `dumpsys activity activities | grep mResumedActivity`."""
+    m = re.search(r"mResumedActivity: ActivityRecord\{\S+ u\d+ ([\w.]+)/", dump)
+    return m.group(1) if m else None
+
+
+def meminfo_mb(text):
+    """Free plus cached memory in MB from /proc/meminfo; cached pages are given back the moment an app needs them."""
+    return sum(int(n) for n in re.findall(r"^(?:MemFree|Cached):\s+(\d+) kB", text, re.M)) // 1024
+
+
+def available_mb():
+    return meminfo_mb(adb_quick("cat", "/proc/meminfo"))
+
+
+def free_now():
+    """The phone's Free memory button: stop the other apps but not the one on screen."""
+    top = top_package(adb("dumpsys activity activities | grep mResumedActivity"))
+    before = available_mb()
+    adb(free_command(None if top == LAUNCHER else top), timeout=15)
+    time.sleep(2)
+    return {"say": f"Memory available: {before} → {available_mb()} MB"}
+
+
 def key_search(app, query, pick=False):
     """From the app's home (a profile already picked), open Search and type the words. Waits for the app to
     finish loading first, so a tap while it is still starting does not lose the keys. With pick, it is on
@@ -254,6 +300,7 @@ def first_video_id(html):
 def open_search(app, query, play=False):
     """Open the app's own search for the words, or just the app when it has no search link. With play, YouTube
     opens the top video result itself instead of the results page."""
+    free_memory(app["package"])
     if play and query and app["package"] == "org.smarttube.stable":
         vid = youtube_first_video(query)
         if vid:
@@ -429,8 +476,11 @@ class Handler(BaseHTTPRequestHandler):
             if self.path == "/api/launch":
                 if body.get("package") not in BY_PACKAGE:
                     return self._json(400, {"error": "unknown app"})
+                free_memory(body["package"])
                 launch(body["package"])
                 return self._json(200, {"ok": True})
+            if self.path == "/api/free":
+                return self._json(200, free_now())
             if self.path == "/api/search":   # second step for key_search apps, after a profile is picked
                 app = BY_PACKAGE.get(body.get("app"))
                 query = re.sub(r"[^\w .,'&:!?\-]", "", str(body.get("query", "")))[:100].strip()
@@ -462,6 +512,12 @@ if __name__ == "__main__":
         assert parse_env("# c\nA=1\n B = 'x y' \nbad\nC=\n") == {"A": "1", "B": "x y", "C": ""}
         assert gemini_text({"candidates": [{"content": {"parts": [{"text": "{"}, {"text": "}"}]}}]}) == "{}"
         assert gemini_text({"promptFeedback": {"blockReason": "SAFETY"}}) == ""
+        cmd = free_command("org.smarttube.stable")
+        assert cmd.startswith("am kill-all;") and "force-stop com.netflix.ninja" in cmd
+        assert "force-stop org.smarttube.stable" not in cmd and "force-stop com.amazon.avod" in cmd
+        assert "force-stop com.amazon.firebat" not in free_command("com.amazon.avod")   # Prime's two packages go together
+        assert meminfo_mb("MemTotal: 895216 kB\nMemFree: 71236 kB\nBuffers: 5 kB\nCached: 325328 kB\nSwapCached: 9 kB\n") == 387
+        assert top_package("  mResumedActivity: ActivityRecord{71e0acb u0 in.startv.hotstar/com.hotstar.MainActivity t7104}\n") == "in.startv.hotstar"
         print("selftest ok")
         raise SystemExit
     print(f"Phone remote for {SERIAL} on http://{os.uname().nodename}:{PORT}  (Ctrl+C to stop)")
