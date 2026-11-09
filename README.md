@@ -54,7 +54,9 @@ A small native Android TV home screen (`com.gathin.tvhome`), built for sets with
 - **Now playing** card, first in that row, while music plays in another app: cover, song, artist and
   previous / play-pause / next. It needs notification access, which `build-and-install.sh` switches on
   (`adb shell settings put secure enabled_notification_listeners com.gathin.tvhome/com.gathin.tvhome.MediaWatcherService`).
-  Apps that send no song details, such as SmartTube, show no card.
+  When an app sends only a YouTube video id (SmartTube does, for a video opened from a link), the title,
+  channel and thumbnail are looked up once from YouTube's public oEmbed; with no details at all the card shows
+  the app's name and Playing or Paused.
 - **Home settings** on the TV: the Settings button opens **Home settings** or **TV settings**. Look (clock
   style and 12 or 24 hour), Pictures (each one on or off, how often they change), Weather (on or off, °C or
   °F, search for a town), Cards, Apps (hide apps) and About (Reset). Changes apply when you go back home.

@@ -48,6 +48,11 @@ final class MediaWatcher {
     private final ComponentName component;
     private MediaSessionManager manager;
     private List<MediaController> controllers = new ArrayList<>();
+    /** YouTube ids SmartTube sends with no title (a video opened from a link): looked up once from oEmbed. */
+    private final java.util.Map<String, String[]> resolved = new java.util.HashMap<>();   // id -> {title, author}
+    private final java.util.Map<String, Bitmap> covers = new java.util.HashMap<>();
+    private final java.util.Set<String> fetching = new java.util.HashSet<>();
+    private static final java.util.regex.Pattern VIDEO_ID = java.util.regex.Pattern.compile("[\\w-]{11}");
     private long pausedAt;
     private String pausedPkg = "";
 
@@ -106,6 +111,55 @@ final class MediaWatcher {
         for (MediaController c : controllers) c.registerCallback(callback, main);
     }
 
+    private String appName(String pkg) {
+        try {
+            android.content.pm.PackageManager pm = ctx.getPackageManager();
+            return String.valueOf(pm.getApplicationLabel(pm.getApplicationInfo(pkg, 0)));
+        } catch (Exception e) {
+            return pkg;
+        }
+    }
+
+    /** Title, channel and thumbnail from YouTube's public oEmbed, off the main thread; then publishes again. */
+    private void lookUp(final String id) {
+        if (!fetching.add(id)) return;
+        new Thread(() -> {
+            try {
+                java.net.HttpURLConnection c = (java.net.HttpURLConnection) new java.net.URL(
+                        "https://www.youtube.com/oembed?format=json&url=" + java.net.URLEncoder.encode(
+                                "https://www.youtube.com/watch?v=" + id, "UTF-8")).openConnection();
+                c.setConnectTimeout(8000);
+                c.setReadTimeout(8000);
+                java.io.ByteArrayOutputStream buf = new java.io.ByteArrayOutputStream();
+                try (java.io.InputStream in = c.getInputStream()) {
+                    byte[] b = new byte[4096];
+                    for (int n; (n = in.read(b)) > 0; ) buf.write(b, 0, n);
+                }
+                org.json.JSONObject o = new org.json.JSONObject(buf.toString("UTF-8"));
+                final String[] info = {o.optString("title"), o.optString("author_name")};
+                Bitmap thumb = null;
+                String t = o.optString("thumbnail_url");
+                if (!t.isEmpty()) {
+                    try (java.io.InputStream in = new java.net.URL(t).openStream()) {
+                        android.graphics.BitmapFactory.Options opt = new android.graphics.BitmapFactory.Options();
+                        opt.inSampleSize = 2;
+                        thumb = android.graphics.BitmapFactory.decodeStream(in, null, opt);
+                    } catch (Exception ex) {
+                                // no cover: the card shows a note icon
+                    }
+                }
+                final Bitmap cover = thumb;
+                main.post(() -> {
+                    resolved.put(id, info);
+                    if (cover != null) covers.put(id, cover);
+                    publish();
+                });
+            } catch (Exception e) {
+                // offline or unknown video: the card keeps the app name
+            }
+        }).start();
+    }
+
     private void publish() {
         MediaController pick = null;
         for (MediaController c : controllers) {
@@ -143,9 +197,24 @@ final class MediaWatcher {
         if (art == null) art = m.getBitmap(MediaMetadata.METADATA_KEY_ART);
         if (art == null) art = m.getBitmap(MediaMetadata.METADATA_KEY_DISPLAY_ICON);
         if (title == null) title = m.getString(MediaMetadata.METADATA_KEY_DISPLAY_TITLE);
+        String id = m.getString(MediaMetadata.METADATA_KEY_MEDIA_ID);
+        boolean youtubeId = id != null && VIDEO_ID.matcher(id).matches();
+        if (art == null && youtubeId) {   // a cover from YouTube's thumbnail when the app sent none
+            art = covers.get(id);
+            if (art == null) lookUp(id);
+        }
         if (title == null) {
-            listener.onNowPlaying(null);
-            return;
+            // No title: show the app and its state, and look the video up when it has a YouTube id.
+            String[] known = id == null ? null : resolved.get(id);
+            if (known != null) {
+                title = known[0];
+                artist = known[1];
+                if (art == null) art = covers.get(id);
+            } else {
+                if (youtubeId) lookUp(id);
+                title = appName(pick.getPackageName());
+                artist = playing ? "Playing" : "Paused";
+            }
         }
         listener.onNowPlaying(new Info(pick.getPackageName(), title, artist == null ? "" : artist, art, playing, pick));
     }

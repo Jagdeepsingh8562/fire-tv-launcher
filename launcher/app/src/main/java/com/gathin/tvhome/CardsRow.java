@@ -58,6 +58,17 @@ final class CardsRow extends HorizontalScrollView {
 
     /** Rebuilds the row. Returns whether there is anything to show. */
     boolean refresh(boolean showRecent, MediaWatcher.Info np) {
+        // Rebuilding removes the focused view, and Android would hand focus to something else: remember which
+        // card and which button inside it had it, and give it back to their replacements.
+        View focused = row.findFocus();
+        int card = -1, inner = 0;
+        for (int i = 0; focused != null && i < row.getChildCount(); i++) {
+            List<View> fs = focusables(row.getChildAt(i), new java.util.ArrayList<View>());
+            if (fs.contains(focused)) {
+                card = i;
+                inner = fs.indexOf(focused);
+            }
+        }
         row.removeAllViews();
         if (np != null) row.addView(nowPlayingCard(np), lp());
         if (showRecent) {
@@ -68,7 +79,20 @@ final class CardsRow extends HorizontalScrollView {
                 row.addView(appCard(app, RecentApps.ago(e.at)), lp());
             }
         }
+        if (card >= 0 && card < row.getChildCount()) {
+            List<View> fs = focusables(row.getChildAt(card), new java.util.ArrayList<View>());
+            if (!fs.isEmpty()) fs.get(Math.min(inner, fs.size() - 1)).requestFocus();
+        }
         return row.getChildCount() > 0;
+    }
+
+    private static List<View> focusables(View v, List<View> out) {
+        if (v.isFocusable()) out.add(v);
+        if (v instanceof ViewGroup) {
+            ViewGroup g = (ViewGroup) v;
+            for (int i = 0; i < g.getChildCount(); i++) focusables(g.getChildAt(i), out);
+        }
+        return out;
     }
 
     View firstCard() {
