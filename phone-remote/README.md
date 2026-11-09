@@ -1,21 +1,30 @@
 # Phone remote
 
 A remote for the Fire TV on your phone, served from a computer at home. It needs no app on the TV: keys,
-typing and opening apps go over adb, and **Ask** ("put on that show about the fake lawyer") goes to Claude
-Code on this computer, which picks an installed app and what to search for in it.
+typing and opening apps go over adb, and **Ask** ("put on that show about the fake lawyer") goes to Gemini
+(or Claude Code), which picks an installed app and what to search for in it.
 
 ```sh
-TV_HOST=192.168.1.26 python3 phone-remote/server.py
+cp .env.example .env      # once, then put your TV's address and GEMINI_API_KEY in .env
+python3 phone-remote/server.py
 ```
+
+Settings come from `.env` at the repo root (git ignores it) or the environment, which wins. See
+[.env.example](../.env.example): `TV_HOST`, `PORT`, `GEMINI_API_KEY`, `GEMINI_MODEL`, `AI_PROVIDER`.
 
 Open `http://<this computer's address>:5400` on a phone on the same Wi-Fi and add it to the home screen.
 
 - **Needs:** Python 3.9+, `adb` (on macOS `brew install --cask android-platform-tools`), ADB debugging on
-  the TV, and for Ask, [Claude Code](https://claude.com/claude-code) signed in to your own plan
-  (`ANTHROPIC_API_KEY` is removed from its environment, so it never bills an API key).
+  the TV, and for Ask either a free Gemini key from [AI Studio](https://aistudio.google.com/apikey) or
+  [Claude Code](https://claude.com/claude-code) signed in to your own plan (`ANTHROPIC_API_KEY` is removed
+  from its environment, so it never bills an API key). With `GEMINI_API_KEY` set, Gemini answers; without
+  it, Claude does; with neither, only Ask is off.
 - **The computer must stay on and awake** while you use it.
-- **Ask:** Claude gets web search only (to check which app streams a title in India), no files or shell. Its
-  answer is checked: it can only choose an app from `APPS` in `server.py` and a plain search phrase.
+- **Ask:** the model gets web search only (Google Search grounding for Gemini; WebSearch for Claude) to check
+  which app streams a title in India, no files or shell. `GEMINI_MODEL` defaults to `gemini-flash-latest`
+  (the free tier is Flash-only). If the free plan or its search quota refuses grounded requests, it asks once
+  more without search; if the daily limit is gone, the phone says so. The key is sent in a header and never
+  logged. Whoever answers, the reply is checked: it can only choose an app from `APPS` in `server.py` and a plain search phrase.
   YouTube (SmartTube): "play X" finds YouTube's top result for X and plays it; anything vaguer opens the
   search results. Netflix and JioHotstar restart (they drop links at
   "Who's watching?"): pick your profile on the TV, tap **Search** on the phone, and it opens their Search and
@@ -23,7 +32,8 @@ Open `http://<this computer's address>:5400` on a phone on the same Wi-Fi and ad
   phone says what to search for. Add an app or a search link in `APPS`.
 - **No password:** anyone on your Wi-Fi can use it, like the TV remote on the table. Never forward a port
   to it. Put guests on a guest network.
-- `python3 phone-remote/server.py --selftest` checks that Claude's answer cannot open anything else.
+- `python3 phone-remote/server.py --selftest` checks that the model's answer cannot open anything else, and the
+  `.env` parsing.
 
 Ideas from [couch-tv](https://github.com/Seagey/couch-tv) (MIT), whose own bridge needs Google's remote
 protocol, which Fire OS 5 does not have.

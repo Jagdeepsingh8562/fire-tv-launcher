@@ -3,9 +3,11 @@
 
 Open http://<this computer>:5400 on a phone on the same Wi-Fi. Keys, typing and opening apps go to the TV
 over adb; "Ask" hands a sentence ("put on that show about the lawyer with no degree") to Claude Code, which
-picks one installed app and a search phrase, and the server opens that app's search.
+picks one installed app and a search phrase, and the server opens that app's search. The picking is done by
+Gemini (GEMINI_API_KEY) or, without a key, by Claude Code.
 
-Usage:  TV_HOST=192.168.1.26 python3 phone-remote/server.py        (PORT=5400, ADB=adb by default)
+Usage:  python3 phone-remote/server.py     settings come from the environment or a .env file at the repo root
+        (see .env.example): TV_HOST, PORT, ADB, GEMINI_API_KEY, GEMINI_MODEL, AI_PROVIDER
 
 No password: anyone on the Wi-Fi can use it, like the TV remote on the table. Keep it off the internet.
 Ideas from couch-tv (github.com/Seagey/couch-tv, MIT), cut down for Fire OS 5 where its bridge cannot run.
@@ -18,10 +20,35 @@ import subprocess
 import tempfile
 import threading
 import time
+import urllib.error
 import urllib.parse
 import urllib.request
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
+
+def parse_env(text):
+    """KEY=value lines (blank lines, # comments and surrounding quotes allowed) as a dict."""
+    out = {}
+    for line in text.splitlines():
+        line = line.strip()
+        if line and not line.startswith("#") and "=" in line:
+            k, v = line.split("=", 1)
+            out[k.strip()] = v.strip().strip("'\"")
+    return out
+
+
+def load_env(path):
+    """Fill in settings from a .env file; real environment variables win, empty values are ignored."""
+    try:
+        values = parse_env(Path(path).read_text())
+    except OSError:
+        return
+    for k, v in values.items():
+        if v:
+            os.environ.setdefault(k, v)
+
+
+load_env(Path(__file__).resolve().parent.parent / ".env")
 
 TV = os.environ.get("TV_HOST", "192.168.1.26")
 SERIAL = TV if ":" in TV else TV + ":5555"
@@ -177,19 +204,70 @@ Reply with ONLY one line of JSON, nothing else:
 {{"say": "<short sentence for the phone, e.g. Opening Suits on Netflix>", "app": "<one package from the list, or null>", "query": "<words to search in that app, or null>", "play": <true when they asked to play one particular song or video, false to just browse or search>}}"""
 
 
-def ask(question):
+def ask_claude(prompt):
     claude = shutil.which(os.environ.get("CLAUDE_BIN", "claude"))
     if not claude:
-        return {"say": "Claude Code is not installed on this computer."}
-    apps = installed()
-    prompt = ASK_PROMPT.format(apps=", ".join(f"{a['name']}: {a['package']}" for a in apps),
-                               q=question.replace('"', "'")[:300])
+        raise RuntimeError("No GEMINI_API_KEY is set and Claude Code is not installed on this computer.")
     env = {k: v for k, v in os.environ.items() if k != "ANTHROPIC_API_KEY"}   # use the Claude plan, never bill a key
     with tempfile.TemporaryDirectory() as cwd:   # no project files or CLAUDE.md in reach
         r = subprocess.run([claude, "-p", prompt, "--tools", "WebSearch", "--allowedTools", "WebSearch",
                             "--no-session-persistence", "--model", "claude-haiku-5-5"],
                            capture_output=True, text=True, timeout=120, env=env, cwd=cwd)
-    m = re.search(r"\{.*\}", r.stdout, re.S)
+    return r.stdout
+
+
+def gemini_text(data):
+    """The reply text of a generateContent response, or "" when it was blocked or empty."""
+    try:
+        return "".join(p.get("text", "") for p in data["candidates"][0]["content"]["parts"])
+    except (KeyError, IndexError, TypeError):
+        return ""
+
+
+def ask_gemini(prompt):
+    """One generateContent call with Google Search grounding. If the plan or its search quota refuses that,
+    ask once more without search (the model then answers from what it knows)."""
+    key = os.environ["GEMINI_API_KEY"]
+    model = os.environ.get("GEMINI_MODEL") or "gemini-flash-latest"
+    url = f"https://generativelanguage.googleapis.com/v1beta/models/{urllib.parse.quote(model)}:generateContent"
+
+    def call(search):
+        body = {"contents": [{"parts": [{"text": prompt}]}]}
+        if search:
+            body["tools"] = [{"google_search": {}}]
+        req = urllib.request.Request(url, json.dumps(body).encode(),
+                                     {"Content-Type": "application/json", "x-goog-api-key": key})   # header, so it never lands in a URL
+        with urllib.request.urlopen(req, timeout=60) as r:
+            return gemini_text(json.load(r))
+
+    try:
+        try:
+            return call(True)
+        except urllib.error.HTTPError as e:
+            if e.code not in (400, 403, 429):
+                raise
+            return call(False)
+    except urllib.error.HTTPError as e:
+        try:
+            why = json.load(e)["error"]["message"]
+        except Exception:
+            why = ""
+        raise RuntimeError(f"Gemini said {e.code}: {why[:120]}" if why else f"Gemini said {e.code}")
+
+
+def provider():
+    return os.environ.get("AI_PROVIDER") or ("gemini" if os.environ.get("GEMINI_API_KEY") else "claude")
+
+
+def ask(question):
+    apps = installed()
+    prompt = ASK_PROMPT.format(apps=", ".join(f"{a['name']}: {a['package']}" for a in apps),
+                               q=question.replace('"', "'")[:300])
+    try:
+        text = ask_gemini(prompt) if provider() == "gemini" else ask_claude(prompt)
+    except RuntimeError as e:
+        return {"say": str(e)}
+    m = re.search(r"\{.*\}", text, re.S)
     try:
         plan = json.loads(m.group(0)) if m else {}
     except ValueError:
@@ -280,6 +358,9 @@ if __name__ == "__main__":
         assert BY_PACKAGE["com.netflix.ninja"].get("key_search")
         assert first_video_id('x"videoRenderer":{"videoId":"s3a4OQR-10M","thumbnail"') == "s3a4OQR-10M"
         assert first_video_id("no results here") is None
+        assert parse_env("# c\nA=1\n B = 'x y' \nbad\nC=\n") == {"A": "1", "B": "x y", "C": ""}
+        assert gemini_text({"candidates": [{"content": {"parts": [{"text": "{"}, {"text": "}"}]}}]}) == "{}"
+        assert gemini_text({"promptFeedback": {"blockReason": "SAFETY"}}) == ""
         print("selftest ok")
         raise SystemExit
     print(f"Phone remote for {SERIAL} on http://{os.uname().nodename}:{PORT}  (Ctrl+C to stop)")
