@@ -12,10 +12,12 @@ Usage:  python3 phone-remote/server.py     settings come from the environment or
 No password: anyone on the Wi-Fi can use it, like the TV remote on the table. Keep it off the internet.
 Ideas from couch-tv (github.com/Seagey/couch-tv, MIT), cut down for Fire OS 5 where its bridge cannot run.
 """
+import base64
 import json
 import os
 import re
 import shutil
+import socket
 import subprocess
 import tempfile
 import threading
@@ -196,6 +198,217 @@ def restart(package):
     launch(package)
 
 
+# This stick has 895 MB and about 450 MB of it is Amazon's own services, which cannot be removed without root.
+# The memory we can free is apps left in the background (Prime's player alone is ~96 MB), and an app that
+# opens while others linger is slow and laggy. So before one opens, every other app of ours is stopped.
+SAME_APP = [{"com.amazon.firebat", "com.amazon.avod"}]   # Prime's screens and its player are two packages
+LAUNCHER = "com.gathin.tvhome"
+
+
+def free_command(keep=None):
+    """Shell line that drops cached background processes and stops every app in APPS except `keep`."""
+    spare = {keep}.union(*[g for g in SAME_APP if keep in g])
+    pkgs = {a["package"] for a in APPS}.union(*SAME_APP) - spare
+    return "; ".join(["am kill-all", *[f"am force-stop {p}" for p in sorted(pkgs)]])
+
+
+def free_memory(keep=None):
+    """Best effort: a failure here must not stop the app from opening."""
+    try:
+        adb(free_command(keep), timeout=15)
+    except Exception as e:
+        log(f"free_memory failed: {e}")
+
+
+def top_package(dump):
+    """The package of the app on screen, from `dumpsys activity activities | grep mResumedActivity`."""
+    m = re.search(r"mResumedActivity: ActivityRecord\{\S+ u\d+ ([\w.]+)/", dump)
+    return m.group(1) if m else None
+
+
+def meminfo_mb(text):
+    """Free plus cached memory in MB from /proc/meminfo; cached pages are given back the moment an app needs them."""
+    return sum(int(n) for n in re.findall(r"^(?:MemFree|Cached):\s+(\d+) kB", text, re.M)) // 1024
+
+
+def available_mb():
+    return meminfo_mb(adb_quick("cat", "/proc/meminfo"))
+
+
+def free_now():
+    """The phone's Free memory button: stop the other apps but not the one on screen."""
+    top = top_package(adb("dumpsys activity activities | grep mResumedActivity"))
+    before = available_mb()
+    adb(free_command(None if top == LAUNCHER else top), timeout=15)
+    time.sleep(2)
+    return {"say": f"Memory available: {before} → {available_mb()} MB"}
+
+
+# ---- title cards -------------------------------------------------------------------------------------------
+# "Put on X" shows a title page on the TV first (TitleActivity in the launcher), and the person picks where to
+# play it. The title, its pictures and each app's id for it come from JustWatch's public GraphQL (no key).
+# JustWatch's name for an app -> (our package, where the app's id sits in JustWatch's link, the app's own link).
+JW_APPS = {
+    "Netflix": ("com.netflix.ninja", r"netflix\.com/title/(\d+)", "https://www.netflix.com/watch/{}"),
+    "Amazon Prime Video": ("com.amazon.firebat", r"gti=(amzn1\.dv\.gti\.[\w-]+)", "https://app.primevideo.com/detail?gti={}"),
+    "JioHotstar": ("in.startv.hotstar", r"hotstar\.com/in/(\d+)", "hotstar://content/{}"),
+}
+LINKS = {pkg: link for pkg, _, link in JW_APPS.values()}
+JW_QUERY = """query($q:String!){popularTitles(country:IN, first:3, filter:{searchQuery:$q}){edges{node{objectType
+content(country:IN, language:"en"){title originalReleaseYear shortDescription posterUrl runtime
+scoring{imdbScore imdbVotes} backdrops(profile:S1440, format:JPG){backdropUrl}}
+offers(country:IN, platform:ANDROID_TV){standardWebURL package{clearName}}}}}}"""
+
+
+def short_count(n):
+    return f"{n / 1e6:.1f}M" if n >= 1e6 else f"{round(n / 1e3)}K" if n >= 1e3 else str(n)
+
+
+def jw_card(node, have, first=None):
+    """The TV's title card from one JustWatch title, with a Play button per app in `have` (packages), `first`
+    leading. None when none of our apps streams it."""
+    c = node["content"]
+    offers = {}
+    for o in node["offers"]:
+        spec = JW_APPS.get(o["package"]["clearName"])
+        m = spec and re.search(spec[1], o["standardWebURL"] or "")
+        if m and spec[0] in have and spec[0] not in offers:
+            offers[spec[0]] = {"package": spec[0], "name": BY_PACKAGE[spec[0]]["name"], "id": m.group(1),
+                               "uri": spec[2].format(m.group(1))}
+    if not offers:
+        return None
+    img = "https://images.justwatch.com"
+    poster = c.get("posterUrl") or ""
+    back = (c.get("backdrops") or [{}])[0].get("backdropUrl") or ""
+    score = c.get("scoring") or {}   # IMDb's, as JustWatch has it; some titles have none
+    return {"title": c["title"], "year": c.get("originalReleaseYear") or "",
+            "imdb": score.get("imdbScore") or "", "votes": short_count(score["imdbVotes"]) if score.get("imdbVotes") else "",
+            "kind": "Series" if node["objectType"] == "SHOW" else "Film", "runtime": c.get("runtime") or 0,
+            "desc": c.get("shortDescription") or "",
+            "poster": img + poster.replace("{profile}", "s592").replace("{format}", "jpg") if poster else "",
+            "backdrop": img + back if back else "",
+            "offers": sorted(offers.values(), key=lambda o: o["package"] != first)}
+
+
+def justwatch(query, have, first=None):
+    body = json.dumps({"query": JW_QUERY, "variables": {"q": query}}).encode()
+    req = urllib.request.Request("https://apis.justwatch.com/graphql", body,
+                                 {"Content-Type": "application/json", "User-Agent": "Mozilla/5.0"})
+    with urllib.request.urlopen(req, timeout=15) as r:
+        edges = json.load(r)["data"]["popularTitles"]["edges"]
+    for e in edges:   # the first title that one of our apps has
+        card = jw_card(e["node"], have, first)
+        if card:
+            return card
+    return None
+
+
+def lan_ip():
+    """This computer's address as the TV sees it."""
+    with socket.socket(socket.AF_INET, socket.SOCK_DGRAM) as s:
+        s.connect((TV.split(":")[0], 9))   # UDP connect sends nothing; it only picks the route
+        return s.getsockname()[0]
+
+
+def show_card(card):
+    card = dict(card, server=f"http://{lan_ip()}:{PORT}")   # where Play asks for the title to be opened
+    raw = base64.urlsafe_b64encode(json.dumps(card).encode()).decode()
+    adb("am", "start", "-n", "com.gathin.tvhome/.TitleActivity", "--es", "card", raw)
+
+
+def title_card(query, first):
+    """Show the title page for the words; the card, or None (any failure means: open the app the old way)."""
+    try:
+        card = justwatch(query, {a["package"] for a in installed()}, first)
+        if card:
+            show_card(card)
+        return card
+    except Exception as e:
+        log(f"title card failed: {e}")
+        return None
+
+
+def send_link(pkg, uri):
+    return adb("am", "start", "-a", "android.intent.action.VIEW", "-d", shell_quote(uri), "-p", pkg)
+
+
+def media_playing(dump, pkg):
+    """True when `pkg` has a media session that is playing (state=3), from `dumpsys media_session`."""
+    return any(seg.split()[:1] == [pkg] and "state=PlaybackState {state=3" in seg for seg in dump.split("package=")[1:])
+
+
+def wait_playing(pkg, seconds):
+    end = time.time() + seconds
+    while time.time() < end:
+        time.sleep(2)
+        try:
+            if media_playing(adb_quick("dumpsys", "media_session"), pkg):
+                return True
+        except subprocess.TimeoutExpired:
+            pass
+    return False
+
+
+def play_netflix(link):
+    pkg = "com.netflix.ninja"
+    if find_pid(adb_quick("ps"), pkg):   # already running: past "Who's watching?" it takes the link as it is
+        send_link(pkg, link)
+        if wait_playing(pkg, 15):
+            return True
+        STATUS["text"] = "Netflix did not take it; restarting it…"
+    restart(pkg)
+    STATUS["text"] = "Waiting for Netflix to start…"
+    wait_calm(pkg, BY_PACKAGE[pkg]["boot"])
+    STATUS["text"] = "Picking the first profile…"
+    time.sleep(2)
+    for step in BY_PACKAGE[pkg]["profile"]:
+        SHELL.send(f"input keyevent {step}")
+        time.sleep(0.8)
+    time.sleep(8)
+    wait_calm(pkg)
+    STATUS["text"] = "Opening it in Netflix…"
+    time.sleep(2)
+    send_link(pkg, link)
+    return wait_playing(pkg, 20)
+
+
+def play_prime(link):
+    """The link opens the title's page; OK on its focused button starts it (the player is another package)."""
+    send_link("com.amazon.firebat", link)
+    for _ in range(15):   # a cold Prime takes a while to show its page and longer to start the video
+        time.sleep(2)
+        if "DetailPageActivity" in adb_quick("dumpsys activity activities | grep mResumedActivity"):
+            break
+    else:
+        return False
+    time.sleep(1.5)
+    SHELL.send("input keyevent 23")
+    return wait_playing("com.amazon.avod", 50)
+
+
+def play(pkg, tid):
+    """Open a title in its app after Play on the TV's title card."""
+    app = BY_PACKAGE[pkg]
+    link = LINKS[pkg].format(tid)
+    STATUS.update(text=f"Opening it in {app['name']}…", busy=True)
+    try:
+        free_memory(pkg)
+        if pkg == "com.netflix.ninja":
+            ok = play_netflix(link)
+        elif pkg == "com.amazon.firebat":
+            ok = play_prime(link)
+        else:
+            send_link(pkg, link)
+            ok = True   # JioHotstar's link plays by itself; its session is not checked
+        STATUS["text"] = f"Playing in {app['name']}" if ok else f"Opened {app['name']}; press Play if it has not started"
+        log(f"play {app['name']} {tid}: {'ok' if ok else 'not confirmed'}")
+    except Exception as e:
+        STATUS["text"] = f"Could not play: {e}"
+        log(f"play failed: {e}")
+    finally:
+        STATUS["busy"] = False
+
+
 def key_search(app, query, pick=False):
     """From the app's home (a profile already picked), open Search and type the words. Waits for the app to
     finish loading first, so a tap while it is still starting does not lose the keys. With pick, it is on
@@ -254,6 +467,7 @@ def first_video_id(html):
 def open_search(app, query, play=False):
     """Open the app's own search for the words, or just the app when it has no search link. With play, YouTube
     opens the top video result itself instead of the results page."""
+    free_memory(app["package"])
     if play and query and app["package"] == "org.smarttube.stable":
         vid = youtube_first_video(query)
         if vid:
@@ -372,6 +586,9 @@ def act(plan, allowed):
     if pkg not in allowed:
         return {"say": say}
     query = re.sub(r"[^\w .,'&:!?\-]", "", str(plan.get("query") or ""))[:100].strip()
+    card = title_card(query, pkg) if pkg in LINKS and query else None
+    if card:   # the title page is on the TV; Play there opens the app
+        return {"say": f"Showing {card['title']} on the TV. Pick where to play it.", "app": pkg, "query": query}
     searched = open_search(BY_PACKAGE[pkg], query, plan.get("play") is True)
     if query and not searched:
         say += f" (search for “{query}” on the TV)"
@@ -429,7 +646,16 @@ class Handler(BaseHTTPRequestHandler):
             if self.path == "/api/launch":
                 if body.get("package") not in BY_PACKAGE:
                     return self._json(400, {"error": "unknown app"})
+                free_memory(body["package"])
                 launch(body["package"])
+                return self._json(200, {"ok": True})
+            if self.path == "/api/free":
+                return self._json(200, free_now())
+            if self.path == "/api/play":   # Play on the TV's title card
+                pkg, tid = body.get("package"), str(body.get("id", ""))
+                if pkg not in LINKS or not re.fullmatch(r"[\w.\-]{1,80}", tid):
+                    return self._json(400, {"error": "bad title"})
+                threading.Thread(target=play, args=(pkg, tid), daemon=True).start()
                 return self._json(200, {"ok": True})
             if self.path == "/api/search":   # second step for key_search apps, after a profile is picked
                 app = BY_PACKAGE.get(body.get("app"))
@@ -462,6 +688,29 @@ if __name__ == "__main__":
         assert parse_env("# c\nA=1\n B = 'x y' \nbad\nC=\n") == {"A": "1", "B": "x y", "C": ""}
         assert gemini_text({"candidates": [{"content": {"parts": [{"text": "{"}, {"text": "}"}]}}]}) == "{}"
         assert gemini_text({"promptFeedback": {"blockReason": "SAFETY"}}) == ""
+        cmd = free_command("org.smarttube.stable")
+        assert cmd.startswith("am kill-all;") and "force-stop com.netflix.ninja" in cmd
+        assert "force-stop org.smarttube.stable" not in cmd and "force-stop com.amazon.avod" in cmd
+        assert "force-stop com.amazon.firebat" not in free_command("com.amazon.avod")   # Prime's two packages go together
+        node = {"objectType": "SHOW", "content": {"title": "Suits", "originalReleaseYear": 2011, "shortDescription": "d",
+                "posterUrl": "/poster/1/{profile}/suits.{format}", "backdrops": [{"backdropUrl": "/backdrop/2/s1440/suits.jpg"}],
+                "runtime": 44, "scoring": {"imdbScore": 8.4, "imdbVotes": 552819}},
+                "offers": [{"standardWebURL": "https://www.netflix.com/title/70195800", "package": {"clearName": "Netflix"}},
+                           {"standardWebURL": "https://app.primevideo.com/detail?gti=amzn1.dv.gti.c8a9-1", "package": {"clearName": "Amazon Prime Video"}},
+                           {"standardWebURL": "https://www.hotstar.com/in/1971064814", "package": {"clearName": "JioHotstar"}}]}
+        c = jw_card(node, {"com.netflix.ninja", "in.startv.hotstar"}, "in.startv.hotstar")   # Prime is not installed
+        assert [o["package"] for o in c["offers"]] == ["in.startv.hotstar", "com.netflix.ninja"]
+        assert c["offers"][0]["uri"] == "hotstar://content/1971064814" and c["offers"][1]["id"] == "70195800"
+        assert c["poster"] == "https://images.justwatch.com/poster/1/s592/suits.jpg" and c["kind"] == "Series"
+        assert c["imdb"] == 8.4 and c["votes"] == "553K"
+        assert short_count(1234567) == "1.2M" and short_count(999) == "999"
+        assert jw_card(dict(node, content=dict(node["content"], scoring=None)), {"com.netflix.ninja"})["imdb"] == ""
+        assert jw_card(node, {"org.smarttube.stable"}) is None
+        assert set(LINKS) == {"com.netflix.ninja", "com.amazon.firebat", "in.startv.hotstar"}
+        dump = "  package=com.netflix.ninja\n  state=PlaybackState {state=3, position=51204}\n  package=com.amazon.avod\n  state=PlaybackState {state=2}\n"
+        assert media_playing(dump, "com.netflix.ninja") and not media_playing(dump, "com.amazon.avod")
+        assert meminfo_mb("MemTotal: 895216 kB\nMemFree: 71236 kB\nBuffers: 5 kB\nCached: 325328 kB\nSwapCached: 9 kB\n") == 387
+        assert top_package("  mResumedActivity: ActivityRecord{71e0acb u0 in.startv.hotstar/com.hotstar.MainActivity t7104}\n") == "in.startv.hotstar"
         print("selftest ok")
         raise SystemExit
     print(f"Phone remote for {SERIAL} on http://{os.uname().nodename}:{PORT}  (Ctrl+C to stop)")

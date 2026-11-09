@@ -73,6 +73,16 @@ A small native Android TV home screen (`com.gathin.tvhome`), built for sets with
   **Sleep in 30, 60 or 90 min** (a sleep timer, cancelled from the same menu) and **Restart…**, which
   opens Fire TV's My Fire TV screen.
 
+- **Title page** (`TitleActivity`): when the phone remote's Ask picks a title, the TV shows a page first, in the
+  same glass style, with the poster, a short description and a **Play on** button for each of Netflix, Prime
+  Video and JioHotstar that has it, rather than the app's own heavy home screen. See [phone-remote/](phone-remote/).
+- **Frees memory for the app you open.** The stick has ~900 MB and about half of it is Amazon's own services,
+  which cannot be removed without root. So opening an app from the launcher first stops the other apps left in
+  the background (Prime Video's player alone holds ~96 MB). Only background processes are stopped; anything
+  playing stays. `build-and-install.sh` also halves the system animation speed so the TV feels quicker; to undo
+  it, `adb shell settings put global window_animation_scale 1.0` (and `transition_animation_scale`,
+  `animator_duration_scale`).
+
 Configure it in [`launcher/app/src/main/res/values/config.xml`](launcher/app/src/main/res/values/config.xml):
 the starting dock, hidden apps, Live TV package and columns. To put your name in the greeting, add
 `tvhome.userName=Alex` to `launcher/local.properties`. The YouTube, Netflix, Prime Video and AirPlay
