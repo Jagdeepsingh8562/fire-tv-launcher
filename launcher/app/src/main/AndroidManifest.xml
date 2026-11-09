@@ -60,6 +60,14 @@
             android:excludeFromRecents="true"
             android:screenOrientation="landscape" />
 
+        <!-- The title page the phone remote shows before opening an app; exported so adb can start it. -->
+        <activity
+            android:name=".TitleActivity"
+            android:exported="true"
+            android:launchMode="singleTop"
+            android:excludeFromRecents="true"
+            android:screenOrientation="landscape" />
+
         <!-- Needed (and turned on over adb) so MediaWatcher can read what is playing. Reads no notifications. -->
         <service
             android:name=".MediaWatcherService"

@@ -33,6 +33,14 @@ Open `http://<this computer's address>:5400` on a phone on the same Wi-Fi and ad
   needed (the phone shows each step). JioHotstar has none: pick your profile on the TV and tap **Search** on
   the phone. Do not use the `profile` keys for an account with a single profile and no "Who's watching?". The other apps open on their home page and the
   phone says what to search for. Add an app or a search link in `APPS`.
+- **Title page:** for a title on Netflix, Prime Video or JioHotstar, Ask looks it up on JustWatch (public, no
+  key) and shows a page on the TV in the home's glass style (poster, IMDb score and votes as JustWatch has them, description, one **Play on** button for each
+  of those apps that has it) instead of opening an app. The launcher's `TitleActivity` draws it. **Play** asks
+  this computer to open the title: **Netflix** gets the link if it is already running, otherwise it is
+  restarted, the first profile is picked and then the link is sent, and the server checks Netflix's media
+  session until it says playing. **Prime Video** opens the title's page and the server presses OK on it.
+  **JioHotstar**'s `hotstar://content/<id>` link plays by itself (its web links are ignored). If this computer
+  cannot be reached, the TV opens the link directly. If JustWatch finds no match, Ask opens the app the old way.
 - **Memory:** the stick has ~900 MB, so before any app opens from here (Ask, an app button, a search) the
   server runs `am kill-all` and force-stops the other apps in `APPS`, plus Prime's player. The **Free memory**
   button does the same on demand, keeps the app on screen, and shows the memory available before and after.
