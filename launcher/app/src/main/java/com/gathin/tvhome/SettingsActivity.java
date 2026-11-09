@@ -55,6 +55,7 @@ public class SettingsActivity extends Activity {
     private TextView title;
     private int section;
     private Runnable back;   // set while a sub-page (place search) is open
+    private boolean rebuilding;   // content is being replaced: focus passing through the menu is not a choice
 
     @Override
     protected void onCreate(Bundle b) {
@@ -92,11 +93,11 @@ public class SettingsActivity extends Activity {
 
         for (int i = 0; i < SECTIONS.length; i++) {
             final int idx = i;
-            View item = row(null, SECTIONS[i], null, null);
+            View item = row(SECTIONS[i], null, null);
             item.setBackgroundResource(R.drawable.menu_row_bg);
             item.setOnFocusChangeListener((v, focused) -> {
                 // While a sub-page is open, focus passing through the menu (when its rows are cleared) is not a choice.
-                if (focused && back == null && section != idx) {
+                if (focused && !rebuilding && back == null && section != idx) {
                     section = idx;
                     show();
                 }
@@ -131,6 +132,7 @@ public class SettingsActivity extends Activity {
     // ---- sections --------------------------------------------------------------------------------
 
     private void show() {
+        rebuilding = true;
         for (int i = 0; i < menu.getChildCount(); i++) menu.getChildAt(i).setActivated(i == section);
         content.removeAllViews();
         switch (section) {
@@ -141,91 +143,100 @@ public class SettingsActivity extends Activity {
             case 4: apps(); break;
             default: about();
         }
+        rebuilding = false;
+    }
+
+    /** Replaces the rows and puts focus back on row {@code index}. Only for changes that add or remove rows. */
+    private void rebuild(int index) {
+        show();
+        focusRow(index);
     }
 
     private void look() {
-        add(toggleRow("Clock style", HomePrefs.bigClock(this), "Big", "Small", v -> {
-            HomePrefs.bigClock(this, v);
-            show();
+        add(flagRow("Clock style", "Big", "Small", new Flag() {
+            public boolean get() { return HomePrefs.bigClock(SettingsActivity.this); }
+            public void set(boolean v) { HomePrefs.bigClock(SettingsActivity.this, v); }
         }));
-        add(toggleRow("Clock format", HomePrefs.clock24h(this), "24 hour", "12 hour", v -> {
-            HomePrefs.clock24h(this, v);
-            show();
+        add(flagRow("Clock format", "24 hour", "12 hour", new Flag() {
+            public boolean get() { return HomePrefs.clock24h(SettingsActivity.this); }
+            public void set(boolean v) { HomePrefs.clock24h(SettingsActivity.this, v); }
         }));
         note("Big puts a tall clock behind the scenery, like couch-tv's Night look. The scenes with a cut-out "
                 + "(Night, Golden hour, Fog, Rainforest dawn) overlap its bottom edge.");
     }
 
     private void pictures() {
-        int cur = 0;
-        for (int i = 0; i < EVERY_SECONDS.length; i++) if (EVERY_SECONDS[i] == HomePrefs.wallSeconds(this)) cur = i;
-        final int next = (cur + 1) % EVERY_SECONDS.length;
-        add(row(null, "Picture changes every", EVERY_LABELS[cur], () -> {
-            HomePrefs.wallSeconds(this, EVERY_SECONDS[next]);
-            show();
-            focusRow(0);
-        }));
-        final Set<String> off = HomePrefs.wallOff(this);
-        List<Backdrop.Item> items = Backdrop.catalog(this);
+        final View every = row("Picture changes every", everyLabel(), null);
+        every.setOnClickListener(v -> {
+            int cur = 0;
+            for (int i = 0; i < EVERY_SECONDS.length; i++) if (EVERY_SECONDS[i] == HomePrefs.wallSeconds(this)) cur = i;
+            HomePrefs.wallSeconds(this, EVERY_SECONDS[(cur + 1) % EVERY_SECONDS.length]);
+            setValue(every, everyLabel());
+        });
+        add(every);
+        final List<Backdrop.Item> items = Backdrop.catalog(this);
         for (final Backdrop.Item it : items) {
-            final View r = row(null, it.caption.isEmpty() ? it.id : it.caption, off.contains(it.id) ? "Off" : "On", null);
+            final View r = row(it.caption.isEmpty() ? it.id : it.caption,
+                    HomePrefs.wallOff(this).contains(it.id) ? "Off" : "On", null);
             thumb(r, it);
-            final boolean isOn = !off.contains(it.id);
             r.setOnClickListener(v -> {
-                Set<String> now = HomePrefs.wallOff(this);
-                if (isOn) {
-                    if (items.size() - now.size() <= 1) {
-                        Toast.makeText(this, "Keep at least one picture on", Toast.LENGTH_SHORT).show();
-                        return;
-                    }
-                    now.add(it.id);
+                Set<String> off = HomePrefs.wallOff(this);
+                if (off.contains(it.id)) {
+                    off.remove(it.id);
+                } else if (items.size() - off.size() <= 1) {
+                    Toast.makeText(this, "Keep at least one picture on", Toast.LENGTH_SHORT).show();
+                    return;
                 } else {
-                    now.remove(it.id);
+                    off.add(it.id);
                 }
-                HomePrefs.wallOff(this, now);
-                int at = content.indexOfChild(r);
-                show();
-                focusRow(at);
+                HomePrefs.wallOff(this, off);
+                setValue(r, off.contains(it.id) ? "Off" : "On");
             });
             add(r);
         }
     }
 
+    private String everyLabel() {
+        for (int i = 0; i < EVERY_SECONDS.length; i++) {
+            if (EVERY_SECONDS[i] == HomePrefs.wallSeconds(this)) return EVERY_LABELS[i];
+        }
+        return HomePrefs.wallSeconds(this) + " seconds";
+    }
+
     private void weatherSection() {
-        add(toggleRow("Weather", HomePrefs.weatherOn(this), "Shown", "Hidden", v -> {
-            HomePrefs.weatherOn(this, v);
-            show();
+        add(flagRow("Weather", "Shown", "Hidden", new Flag() {
+            public boolean get() { return HomePrefs.weatherOn(SettingsActivity.this); }
+            public void set(boolean v) { HomePrefs.weatherOn(SettingsActivity.this, v); }
         }));
-        add(toggleRow("Temperature", HomePrefs.fahrenheit(this), "°F", "°C", v -> {
-            HomePrefs.fahrenheit(this, v);
-            show();
+        add(flagRow("Temperature", "°F", "°C", new Flag() {
+            public boolean get() { return HomePrefs.fahrenheit(SettingsActivity.this); }
+            public void set(boolean v) { HomePrefs.fahrenheit(SettingsActivity.this, v); }
         }));
-        add(row(null, "Place", HomePrefs.placeName(this), this::placeSearch));
+        add(row("Place", HomePrefs.placeName(this), this::placeSearch));
         note("Weather comes from Open-Meteo, free and with no account. Only the place's coordinates are sent.");
     }
 
     private void cards() {
-        add(toggleRow("Keep watching", HomePrefs.keepWatching(this), "Shown", "Hidden", v -> {
-            HomePrefs.keepWatching(this, v);
-            show();
+        add(flagRow("Keep watching", "Shown", "Hidden", new Flag() {
+            public boolean get() { return HomePrefs.keepWatching(SettingsActivity.this); }
+            public void set(boolean v) { HomePrefs.keepWatching(SettingsActivity.this, v); }
         }));
-        add(row(null, "Clear the list", "", () -> {
+        add(row("Clear the list", "", () -> {
             RecentApps.clear(this);
             Toast.makeText(this, "Keep watching cleared", Toast.LENGTH_SHORT).show();
         }));
-        add(toggleRow("Now playing", HomePrefs.nowPlaying(this), "Shown", "Hidden", v -> {
-            HomePrefs.nowPlaying(this, v);
-            show();
+        add(flagRow("Now playing", "Shown", "Hidden", new Flag() {
+            public boolean get() { return HomePrefs.nowPlaying(SettingsActivity.this); }
+            public void set(boolean v) { HomePrefs.nowPlaying(SettingsActivity.this, v); }
         }));
-        boolean access = MediaWatcher.hasAccess(this);
-        add(row(null, "Music access", access ? "On" : "Needs setup", () ->
+        final boolean access = MediaWatcher.hasAccess(this);
+        add(row("Music access", access ? "On" : "Needs setup", () ->
                 Toast.makeText(this, access ? "Music access is on" : getString(R.string.np_needs_access), Toast.LENGTH_LONG).show()));
         note("Keep watching lists the apps you opened from this home, newest first. Now playing shows the song, "
                 + "artist and cover of music playing in another app, with previous, play or pause and next.");
     }
 
     private void apps() {
-        final Set<String> hidden = HomePrefs.hiddenApps(this);
         PackageManager pm = getPackageManager();
         List<ResolveInfo> found = pm.queryIntentActivities(
                 new Intent(Intent.ACTION_MAIN).addCategory(Intent.CATEGORY_LEANBACK_LAUNCHER), 0);
@@ -238,16 +249,12 @@ public class SettingsActivity extends Activity {
         }
         Collections.sort(list, (a, b) -> a[0].compareToIgnoreCase(b[0]));
         for (final String[] app : list) {
-            final boolean shown = !hidden.contains(app[1]);
-            View r = row(null, app[0], shown ? "Shown" : "Hidden", null);
+            final View r = row(app[0], HomePrefs.hiddenApps(this).contains(app[1]) ? "Hidden" : "Shown", null);
             r.setOnClickListener(v -> {
-                Set<String> now = HomePrefs.hiddenApps(this);
-                if (shown) now.add(app[1]);
-                else now.remove(app[1]);
-                HomePrefs.hiddenApps(this, now);
-                int at = content.indexOfChild(r);
-                show();
-                focusRow(at);
+                Set<String> hidden = HomePrefs.hiddenApps(this);
+                if (!hidden.remove(app[1])) hidden.add(app[1]);
+                HomePrefs.hiddenApps(this, hidden);
+                setValue(r, hidden.contains(app[1]) ? "Hidden" : "Shown");
             });
             add(r);
         }
@@ -261,24 +268,24 @@ public class SettingsActivity extends Activity {
         } catch (PackageManager.NameNotFoundException ignored) {
             // no version to show
         }
-        add(row(null, "Version", version, null));
-        add(row(null, "Reset home settings", "", () -> {
+        add(row("Version", version, null));
+        final View reset = row("Reset home settings", "", null);
+        reset.setOnClickListener(v -> {
             HomePrefs.reset(this);
             RecentApps.clear(this);
             Toast.makeText(this, "Home settings reset", Toast.LENGTH_SHORT).show();
-            show();
-        }));
+        });
+        add(reset);
         note("Scenes: generated for couch-tv, free to use. Photos: CC0 / Unsplash. See CREDITS.md in the project.");
     }
 
     // ---- place search ----------------------------------------------------------------------------
 
     private void placeSearch() {
-        back = () -> {
-            show();
-            focusRow(2);
-        };
+        back = () -> rebuild(2);
+        rebuilding = true;
         content.removeAllViews();
+        rebuilding = false;
         final EditText box = new EditText(this);
         box.setHint("Type a town or city, then press OK");
         box.setHintTextColor(0x80FFFFFF);
@@ -334,7 +341,7 @@ public class SettingsActivity extends Activity {
                     return;
                 }
                 for (final String[] p : found) {
-                    View r = row(null, p[1], "", () -> {
+                    View r = row(p[1], "", () -> {
                         HomePrefs.place(this, p[0], p[2], p[3]);
                         Toast.makeText(this, p[0] + " set", Toast.LENGTH_SHORT).show();
                         Runnable b = back;
@@ -350,26 +357,28 @@ public class SettingsActivity extends Activity {
 
     // ---- rows ------------------------------------------------------------------------------------
 
-    private interface Toggle { void set(boolean value); }
+    private interface Flag {
+        boolean get();
+        void set(boolean value);
+    }
 
-    private View toggleRow(String name, final boolean value, String on, String off, final Toggle t) {
-        return row(null, name, value ? on : off, () -> {
-            t.set(!value);
-            focusRow(0 + indexOfTitle(name));
+    /** An on/off row. Clicking flips the saved value and rewrites the row's own text: no row is removed or rebuilt,
+     *  so focus stays put. */
+    private View flagRow(String name, final String on, final String off, final Flag f) {
+        final View r = row(name, f.get() ? on : off, null);
+        r.setOnClickListener(v -> {
+            f.set(!f.get());
+            setValue(r, f.get() ? on : off);
         });
+        return r;
     }
 
-    private int indexOfTitle(String name) {
-        for (int i = 0; i < content.getChildCount(); i++) {
-            View v = content.getChildAt(i);
-            TextView t = v.findViewById(R.id.title);
-            if (t != null && name.contentEquals(t.getText())) return i;
-        }
-        return 0;
+    private void setValue(View row, String text) {
+        ((TextView) row.findViewById(R.id.status)).setText(text);
     }
 
-    /** A focusable row: title on the left, value on the right. A null click leaves the row for the caller. */
-    private View row(Object ignored, String name, String value, Runnable click) {
+    /** A focusable row: title on the left, value on the right. Menu rows and rows without an action pass null. */
+    private View row(String name, String value, Runnable click) {
         View r = getLayoutInflater().inflate(R.layout.item_input, null, false);
         r.findViewById(R.id.icon).setVisibility(View.GONE);
         r.findViewById(R.id.dot).setVisibility(View.GONE);
@@ -384,7 +393,7 @@ public class SettingsActivity extends Activity {
         r.setLayoutParams(lp(ViewGroup.LayoutParams.MATCH_PARENT, dp(52), 0, 0, 0, dp(4)));
         r.setPadding(dp(18), 0, dp(18), 0);
         if (click != null) r.setOnClickListener(x -> click.run());
-        // Left from a row goes back to the menu; the menu rows set their own keys.
+        // Left from a row goes back to the menu (or out of a sub-page); the menu rows set their own keys.
         r.setOnKeyListener((vw, code, e) -> {
             if (e.getAction() == KeyEvent.ACTION_DOWN && code == KeyEvent.KEYCODE_DPAD_LEFT && menu.indexOfChild(vw) < 0) {
                 if (back != null) {
