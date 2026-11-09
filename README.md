@@ -46,10 +46,10 @@ A small native Android TV home screen (`com.gathin.tvhome`), built for sets with
   band of five wide app banners, and the focused dock app's name in large light type above it.
 - Press Down for the rest of your apps in the same five-column grid.
 - Pin, unpin and reorder dock apps on the TV: hold OK or press Menu on an app.
-- Round buttons top right: **Inputs** (HDMI ports, AV and Live TV), **Wi-Fi** (signal bars, plus a
-  warning when there is no internet), **Earphones** (connects or disconnects a paired Bluetooth
-  headset, `bt_device_name` in config.xml) and **Settings**. Greeting, clock and date top left, set
-  in [Outfit](https://fonts.google.com/specimen/Outfit). Focus is sunrise amber.
+- Round buttons top right: **Wi-Fi** (signal bars; highlighted, it opens into the network name and
+  the TV's IP address), **Earphones** (connects or disconnects a paired Bluetooth headset,
+  `bt_device_name` in config.xml) and **Settings**. Greeting, clock and date top left, set in
+  [Outfit](https://fonts.google.com/specimen/Outfit).
 - A power button bottom right: **Sleep** (needs the one-time
   `adb shell dpm set-active-admin com.gathin.tvhome/.AdminReceiver`, which `build-and-install.sh` runs)
   and **Restart…**, which opens Fire TV's My Fire TV screen.

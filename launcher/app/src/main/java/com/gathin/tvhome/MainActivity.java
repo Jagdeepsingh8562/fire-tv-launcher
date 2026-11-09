@@ -7,8 +7,6 @@ import android.content.Intent;
 import android.graphics.Color;
 import android.graphics.Rect;
 import android.graphics.drawable.ColorDrawable;
-import android.media.tv.TvContract;
-import android.media.tv.TvInputInfo;
 import android.media.tv.TvInputManager;
 import android.net.ConnectivityManager;
 import android.net.LinkProperties;
@@ -59,7 +57,6 @@ public class MainActivity extends Activity implements AppAdapter.TileListener {
     /** Tiles per row and dock slots (res/values/config.xml, columns). Set in onCreate. */
     static int COLUMNS = 4;
     private static final long MINUTE_MS = 60_000L;
-    private String liveTvPkg;
 
     private AppAdapter adapter;
     private RecyclerView grid;
@@ -123,7 +120,6 @@ public class MainActivity extends Activity implements AppAdapter.TileListener {
         setContentView(R.layout.activity_main);
         density = getResources().getDisplayMetrics().density;
         COLUMNS = Math.max(1, getResources().getInteger(R.integer.columns));
-        liveTvPkg = getString(R.string.live_tv_package).trim();
 
         root = findViewById(R.id.root);
         glass = findViewById(R.id.glass);
@@ -206,10 +202,11 @@ public class MainActivity extends Activity implements AppAdapter.TileListener {
             s.setSpring(new SpringForce().setStiffness(260f).setDampingRatio(0.9f));
         }
 
-        View btnInputs = findViewById(R.id.btnInputs);
         View btnSettings = findViewById(R.id.btnSettings);
-        btnInputs.setOnClickListener(v -> showInputs());
         btnWifi.setOnClickListener(v -> open(new Intent(Settings.ACTION_WIFI_SETTINGS)));
+        btnWifi.setOnFocusChangeListener((v, focused) -> updateWifiLabel());
+        ((ViewGroup) findViewById(R.id.topButtons)).getLayoutTransition()
+                .enableTransitionType(android.animation.LayoutTransition.CHANGING);
         btnSettings.setOnClickListener(v -> open(new Intent(Settings.ACTION_SETTINGS)));
         btnSettings.setOnLongClickListener(v -> {
             showHomeScreenMenu(v);
@@ -225,10 +222,9 @@ public class MainActivity extends Activity implements AppAdapter.TileListener {
                 showHomeScreenMenu(v);
                 return true;
             }
-            if (keyCode == KeyEvent.KEYCODE_DPAD_LEFT && v.getId() == R.id.btnInputs) return true;
+            if (keyCode == KeyEvent.KEYCODE_DPAD_LEFT && v.getId() == R.id.btnWifi) return true;
             return keyCode == KeyEvent.KEYCODE_DPAD_RIGHT && v.getId() == R.id.btnSettings;
         };
-        tintIcons((TextView) btnInputs);
         tintIcons((TextView) btnSettings);
         TextView btnBt = findViewById(R.id.btnBt);
         tintIcons(btnBt);
@@ -243,7 +239,6 @@ public class MainActivity extends Activity implements AppAdapter.TileListener {
         // Bottom-right corner: Right and Down lead nowhere, Up goes to Settings (nextFocusUp in the layout).
         btnPower.setOnKeyListener((v, keyCode, event) -> event.getAction() == KeyEvent.ACTION_DOWN
                 && (keyCode == KeyEvent.KEYCODE_DPAD_RIGHT || keyCode == KeyEvent.KEYCODE_DPAD_DOWN));
-        btnInputs.setOnKeyListener(pillKeys);
         btnWifi.setOnKeyListener(pillKeys);
         btnSettings.setOnKeyListener(pillKeys);
 
@@ -685,23 +680,51 @@ public class MainActivity extends Activity implements AppAdapter.TileListener {
         ConnectivityManager cm = (ConnectivityManager) getSystemService(CONNECTIVITY_SERVICE);
         android.net.NetworkInfo ni = cm != null ? cm.getActiveNetworkInfo() : null;
         if (ni == null || !ni.isConnected()) {
-            setWifiPill(R.drawable.ic_wifi_off, getString(R.string.offline), COLOR_ERROR);
+            setWifiPill(R.drawable.ic_wifi_off, getString(R.string.offline), COLOR_ERROR, null);
             return;
         }
         // ponytail: API 22 has no NET_CAPABILITY_VALIDATED, so "no internet" is not detected here.
         boolean online = true;
+        // Highlighted, a healthy button opens into a pill with the network name and the TV's IP address.
+        boolean detail = btnWifi.isFocused();
+        String ip = ipAddress();
         if (ni.getType() == ConnectivityManager.TYPE_ETHERNET) {
-            setWifiPill(R.drawable.ic_ethernet, getString(R.string.ethernet), 0);
+            setWifiPill(R.drawable.ic_ethernet, getString(R.string.ethernet), 0,
+                    detail ? join(getString(R.string.ethernet), ip) : null);
             return;
         }
         WifiManager wm = (WifiManager) getApplicationContext().getSystemService(WIFI_SERVICE);
         WifiInfo info = wm != null ? wm.getConnectionInfo() : null;
         int bars = info != null ? WifiManager.calculateSignalLevel(info.getRssi(), WIFI_ICONS.length) : 0;
         if (!online) {
-            setWifiPill(WIFI_ICONS[bars], getString(R.string.no_internet), COLOR_WARN);
+            setWifiPill(WIFI_ICONS[bars], getString(R.string.no_internet), COLOR_WARN, null);
             return;
         }
-        setWifiPill(WIFI_ICONS[bars], getString(R.string.wifi), 0);
+        String ssid = info != null ? info.getSSID() : null;
+        if (ssid != null) ssid = ssid.replace("\"", "");
+        if (ssid == null || ssid.isEmpty() || ssid.equals("<unknown ssid>")) ssid = getString(R.string.wifi);
+        int v4 = info != null ? info.getIpAddress() : 0;   // little-endian; no INTERNET permission needed
+        if (v4 != 0) ip = (v4 & 0xFF) + "." + (v4 >> 8 & 0xFF) + "." + (v4 >> 16 & 0xFF) + "." + (v4 >>> 24);
+        setWifiPill(WIFI_ICONS[bars], getString(R.string.wifi), 0, detail ? join(ssid, ip) : null);
+    }
+
+    private static String join(String a, String b) {
+        return b == null ? a : a + "  \u00B7  " + b;
+    }
+
+    /** The TV's IPv4 address from its network interfaces (Ethernet), or null. */
+    private static String ipAddress() {
+        try {
+            for (java.net.NetworkInterface nif : Collections.list(java.net.NetworkInterface.getNetworkInterfaces())) {
+                if (!nif.isUp() || nif.isLoopback()) continue;
+                for (java.net.InetAddress a : Collections.list(nif.getInetAddresses())) {
+                    if (a instanceof java.net.Inet4Address && !a.isLoopbackAddress()) return a.getHostAddress();
+                }
+            }
+        } catch (java.net.SocketException ignored) {
+            // no address to show
+        }
+        return null;
     }
 
     /** Dark icon on the white focused pill. android:drawableTint needs API 23, so tint in code for Fire OS 5. */
@@ -711,12 +734,12 @@ public class MainActivity extends Activity implements AppAdapter.TileListener {
             if (d != null) d.mutate().setTintList(tint);
     }
 
-    private void setWifiPill(int icon, String label, int alertColor) {
+    private void setWifiPill(int icon, String label, int alertColor, String detail) {
         btnWifi.setCompoundDrawablesRelativeWithIntrinsicBounds(icon, 0, 0, 0);
         tintIcons(btnWifi);
         btnWifi.setContentDescription(label);
         // Healthy: a round icon button like Inputs and Settings. Alert: a pill with the status text.
-        boolean iconOnly = alertColor == 0;
+        boolean iconOnly = alertColor == 0 && detail == null;
         ViewGroup.LayoutParams lp = btnWifi.getLayoutParams();
         lp.width = iconOnly ? (int) (42 * density) : ViewGroup.LayoutParams.WRAP_CONTENT;
         btnWifi.setLayoutParams(lp);
@@ -724,6 +747,10 @@ public class MainActivity extends Activity implements AppAdapter.TileListener {
         btnWifi.setCompoundDrawablePadding(iconOnly ? 0 : (int) (9 * density));
         if (iconOnly) {
             btnWifi.setText("");
+            return;
+        }
+        if (detail != null) {
+            btnWifi.setText(detail);
             return;
         }
         SpannableString text = new SpannableString("\u25CF  " + label);
@@ -738,75 +765,6 @@ public class MainActivity extends Activity implements AppAdapter.TileListener {
         } catch (ActivityNotFoundException e) {
             Toast.makeText(this, "Not available on this TV", Toast.LENGTH_SHORT).show();
         }
-    }
-
-    /** Dropdown menu under the Inputs pill: HDMI ports (with connection state), AV and Live TV. */
-    private void showInputs() {
-        View anchor = findViewById(R.id.btnInputs);
-        View panel = getLayoutInflater().inflate(R.layout.popup_inputs, root, false);
-        LinearLayout rows = panel.findViewById(R.id.rows);
-
-        // Compact: as wide as the Inputs pill (a touch wider so "HDMI 1" fits), hanging right below it.
-        int width = Math.max(anchor.getWidth(), (int) (150 * density));
-        final PopupWindow popup = new PopupWindow(panel, width, ViewGroup.LayoutParams.WRAP_CONTENT, true);
-        popup.setBackgroundDrawable(new ColorDrawable(Color.TRANSPARENT));   // needed for Back to dismiss
-        popup.setOutsideTouchable(true);
-        popup.setAnimationStyle(0);
-        popup.setElevation(0f);
-
-        TvInputManager tim = (TvInputManager) getSystemService(TV_INPUT_SERVICE);
-        boolean sawNonHdmi = false;
-        if (tim != null) {
-            List<TvInputInfo> inputs = new ArrayList<>(tim.getTvInputList());
-            // HDMI ports first in port order, then AV and the rest.
-            Collections.sort(inputs, (a, b) -> {
-                boolean ha = a.getType() == TvInputInfo.TYPE_HDMI, hb = b.getType() == TvInputInfo.TYPE_HDMI;
-                if (ha != hb) return ha ? -1 : 1;
-                return String.valueOf(a.loadLabel(this)).compareToIgnoreCase(String.valueOf(b.loadLabel(this)));
-            });
-            for (TvInputInfo info : inputs) {
-                if (!info.isPassthroughInput()) continue;
-                CharSequence l = info.loadLabel(this);
-                String label = l == null ? info.getId() : l.toString();
-                boolean hdmi = info.getType() == TvInputInfo.TYPE_HDMI;
-                if (hdmi && !label.toUpperCase().contains("HDMI")) label = "HDMI " + label;
-                final String id = info.getId();
-                int state = tim.getInputState(id);
-                if (!hdmi && rows.getChildCount() > 0 && !sawNonHdmi) addSeparator(rows);
-                if (!hdmi) sawNonHdmi = true;
-                addInputRow(rows, popup, hdmi ? R.drawable.ic_input : R.drawable.ic_av, label, state,
-                        () -> open(new Intent(Intent.ACTION_VIEW).setDataAndType(
-                                TvContract.buildChannelUriForPassthroughInput(id), "vnd.android.cursor.item/channel")));
-            }
-        }
-        Intent liveTv = liveTvPkg.isEmpty() ? null : getPackageManager().getLeanbackLaunchIntentForPackage(liveTvPkg);
-        if (liveTv != null) {
-            if (rows.getChildCount() > 0) addSeparator(rows);
-            addInputRow(rows, popup, R.drawable.ic_livetv, getString(R.string.live_tv), -1, () -> open(liveTv));
-        }
-        if (rows.getChildCount() == 0) {
-            Toast.makeText(this, R.string.no_inputs, Toast.LENGTH_SHORT).show();
-            return;
-        }
-
-        // Drop in: fade and unfold from the top edge.
-        panel.setAlpha(0f);
-        panel.setPivotY(0f);
-        panel.setScaleY(0.92f);
-        panel.setTranslationY(-8 * density);
-        popup.showAsDropDown(anchor, 0, (int) (10 * density), Gravity.START);
-        panel.animate().alpha(1f).scaleY(1f).translationY(0f).setDuration(220)
-                .setInterpolator(new android.view.animation.DecelerateInterpolator(1.6f)).start();
-        rows.getChildAt(0).requestFocus();
-    }
-
-    private void addSeparator(LinearLayout rows) {
-        View line = new View(this);
-        line.setBackgroundColor(0x1FFFFFFF);
-        LinearLayout.LayoutParams lp = new LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, (int) density);
-        int m = (int) (6 * density), h = (int) (12 * density);
-        lp.setMargins(h, m, h, m);
-        rows.addView(line, lp);
     }
 
     private void addInputRow(LinearLayout rows, PopupWindow popup, int iconRes, String title, int state, Runnable action) {
