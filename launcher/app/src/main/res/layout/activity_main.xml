@@ -25,6 +25,83 @@
         android:layout_height="match_parent"
         android:background="@drawable/bg_scrim" />
 
+    <!-- Big clock style (couch-tv's Night look): the date and a huge thin clock, placed per picture in code. The
+         cut-out above them is the scene's scenery without its sky, so peaks and hills overlap the digits. -->
+    <FrameLayout
+        android:id="@+id/bigBlock"
+        android:layout_width="match_parent"
+        android:layout_height="match_parent"
+        android:visibility="gone">
+
+        <TextClock
+            android:id="@+id/bigClock"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:format12Hour="h:mm"
+            android:format24Hour="HH:mm"
+            android:gravity="center_horizontal"
+            android:includeFontPadding="false"
+            android:letterSpacing="-0.02"
+            android:textColor="#E6FFFFFF"
+            android:textSize="200sp"
+            android:shadowColor="#40000000"
+            android:shadowRadius="24"
+            android:shadowDy="4" />
+
+        <LinearLayout
+            android:id="@+id/bigDateRow"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:gravity="center_horizontal|center_vertical"
+            android:orientation="horizontal">
+
+            <TextClock
+                android:id="@+id/bigDate"
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:format12Hour="EEEE d MMMM"
+                android:format24Hour="EEEE d MMMM"
+                android:textColor="#F2FFFFFF"
+                android:textSize="21sp"
+                android:shadowColor="#66000000"
+                android:shadowRadius="10" />
+
+            <LinearLayout
+                android:id="@+id/bigWeather"
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:layout_marginStart="14dp"
+                android:gravity="center_vertical"
+                android:orientation="horizontal"
+                android:visibility="gone">
+
+                <ImageView
+                    android:id="@+id/bigWeatherIcon"
+                    android:layout_width="22dp"
+                    android:layout_height="22dp"
+                    android:contentDescription="@null" />
+
+                <TextView
+                    android:id="@+id/bigWeatherTemp"
+                    android:layout_width="wrap_content"
+                    android:layout_height="wrap_content"
+                    android:layout_marginStart="6dp"
+                    android:textColor="#D9FFFFFF"
+                    android:textSize="19sp"
+                    android:shadowColor="#66000000"
+                    android:shadowRadius="10" />
+            </LinearLayout>
+        </LinearLayout>
+    </FrameLayout>
+
+    <ImageView
+        android:id="@+id/wallFg"
+        android:layout_width="match_parent"
+        android:layout_height="match_parent"
+        android:scaleType="centerCrop"
+        android:visibility="gone"
+        android:importantForAccessibility="no" />
+
     <!-- Dims the scene while browsing the app grid, so tiles read clearly over the ridges. -->
     <View
         android:id="@+id/gridShade"

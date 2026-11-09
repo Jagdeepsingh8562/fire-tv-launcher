@@ -7,16 +7,6 @@ import android.os.SystemClock;
 
 import org.json.JSONObject;
 
-import java.io.ByteArrayOutputStream;
-import java.io.InputStream;
-import java.net.URL;
-import java.security.KeyStore;
-import java.security.cert.CertificateFactory;
-
-import javax.net.ssl.HttpsURLConnection;
-import javax.net.ssl.SSLContext;
-import javax.net.ssl.SSLSocketFactory;
-import javax.net.ssl.TrustManagerFactory;
 
 /**
  * Current temperature and sky from Open-Meteo (free, no key), over https with Let's Encrypt's ISRG roots
@@ -30,18 +20,24 @@ final class Weather {
 
     private static final long REFRESH_MS = 30 * 60_000L;
     private final Context ctx;
-    private final String lat, lon;
-    private SSLSocketFactory tls;
+    private String lat = "", lon = "";
     private final Listener listener;
     private final Handler main = new Handler(Looper.getMainLooper());
     private long fetchedAt = -REFRESH_MS;
     private boolean busy;
 
-    Weather(Context ctx, String lat, String lon, Listener listener) {
+    Weather(Context ctx, Listener listener) {
         this.ctx = ctx.getApplicationContext();
-        this.lat = lat.trim();
-        this.lon = lon.trim();
         this.listener = listener;
+    }
+
+    /** A new place (or the same one): forget the last reading when the place changed so it is fetched again. */
+    void setPlace(String lat, String lon, boolean fahrenheitIgnored) {
+        lat = lat.trim();
+        lon = lon.trim();
+        if (!lat.equals(this.lat) || !lon.equals(this.lon)) fetchedAt = -REFRESH_MS;
+        this.lat = lat;
+        this.lon = lon;
     }
 
     /** Fetch if the last answer is older than REFRESH_MS. */
@@ -50,20 +46,9 @@ final class Weather {
         busy = true;
         new Thread(() -> {
             try {
-                URL url = new URL("https://api.open-meteo.com/v1/forecast?latitude=" + lat + "&longitude=" + lon
-                        + "&current=temperature_2m,weather_code,is_day");
-                HttpsURLConnection c = (HttpsURLConnection) url.openConnection();
-                c.setSSLSocketFactory(tls());
-                c.setConnectTimeout(8000);
-                c.setReadTimeout(10000);
-                ByteArrayOutputStream buf = new ByteArrayOutputStream();
-                try (InputStream in = c.getInputStream()) {
-                    byte[] b = new byte[4096];
-                    for (int n; (n = in.read(b)) > 0; ) buf.write(b, 0, n);
-                } finally {
-                    c.disconnect();
-                }
-                JSONObject cur = new JSONObject(buf.toString("UTF-8")).getJSONObject("current");
+                String body = OpenMeteo.get(ctx, "https://api.open-meteo.com/v1/forecast?latitude=" + lat
+                        + "&longitude=" + lon + "&current=temperature_2m,weather_code,is_day");
+                JSONObject cur = new JSONObject(body).getJSONObject("current");
                 int temp = (int) Math.round(cur.getDouble("temperature_2m"));
                 int icon = icon(cur.getInt("weather_code"), cur.optInt("is_day", 1) == 1);
                 main.post(() -> {
@@ -75,25 +60,6 @@ final class Weather {
                 main.post(() -> busy = false);   // try again on the next tick; the last reading stays
             }
         }).start();
-    }
-
-    /** TLS that trusts only the bundled ISRG roots: this connection only ever talks to Open-Meteo. */
-    private SSLSocketFactory tls() throws Exception {
-        if (tls != null) return tls;
-        KeyStore ks = KeyStore.getInstance(KeyStore.getDefaultType());
-        ks.load(null, null);
-        CertificateFactory cf = CertificateFactory.getInstance("X.509");
-        int[] roots = {R.raw.isrg_root_x1, R.raw.isrg_root_x2};
-        for (int i = 0; i < roots.length; i++) {
-            try (InputStream in = ctx.getResources().openRawResource(roots[i])) {
-                ks.setCertificateEntry("isrg" + i, cf.generateCertificate(in));
-            }
-        }
-        TrustManagerFactory tmf = TrustManagerFactory.getInstance(TrustManagerFactory.getDefaultAlgorithm());
-        tmf.init(ks);
-        SSLContext sc = SSLContext.getInstance("TLS");
-        sc.init(null, tmf.getTrustManagers(), null);
-        return tls = sc.getSocketFactory();
     }
 
     /** WMO weather code to one of the wx_ icons. */

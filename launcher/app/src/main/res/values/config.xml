@@ -35,4 +35,5 @@
     <!-- Weather beside the date (Open-Meteo, free, no key). Empty latitude: no weather. Find a place: https://open-meteo.com/en/docs/geocoding-api -->
     <string name="weather_latitude" translatable="false">26.92</string>
     <string name="weather_longitude" translatable="false">75.79</string>
+    <string name="weather_place" translatable="false">Jaipur</string>
 </resources>

@@ -41,10 +41,23 @@ step with screenshots from the TV. If you'd rather do it by hand, the pieces are
 A small native Android TV home screen (`com.gathin.tvhome`), built for sets with 1 GB of RAM:
 
 - Ambient-glass look (ported from CleanYourTV's `ambient-glass` theme, since its launcher needs Android 8):
-  eight landscape photos rotating every 5 minutes with their names under the buttons (CC0 / Unsplash,
-  see `launcher/app/src/main/assets/wallpapers/` and [CREDITS.md](CREDITS.md)), a frosted-glass dock
-  band of five wide app banners, and the focused dock app's name in large light type above it.
-- Press Down for the rest of your apps in the same five-column grid.
+  a frosted-glass dock band of five wide app banners, the focused dock app's name in large light type
+  above it, and a glass highlight that glides between tiles. Press Down for the rest of your apps in
+  the same five-column grid.
+- Pictures from [couch-tv](https://github.com/Seagey/couch-tv): its five scenes (Night, Golden hour,
+  Waterline, Fog, Rainforest dawn) plus eight landscape photos, a new one every 5 minutes (changeable).
+  **Big clock** (on by default): the date and a huge thin clock behind the scenery, so peaks and hills
+  overlap its bottom edge, as in couch-tv's Night look. **Small clock** is the older top-left one.
+- **Keep watching** (after couch-tv): a row of glass cards above the dock for the apps you opened from
+  this home, newest first. Fire OS 5 keeps no watch history, so it is apps only, not shows. Up from the
+  dock enters it.
+- **Now playing** card, first in that row, while music plays in another app: cover, song, artist and
+  previous / play-pause / next. It needs notification access, which `build-and-install.sh` switches on
+  (`adb shell settings put secure enabled_notification_listeners com.gathin.tvhome/com.gathin.tvhome.MediaWatcherService`).
+  Apps that send no song details, such as SmartTube, show no card.
+- **Home settings** on the TV: the Settings button opens **Home settings** or **TV settings**. Look (clock
+  style and 12 or 24 hour), Pictures (each one on or off, how often they change), Weather (on or off, °C or
+  °F, search for a town), Cards, Apps (hide apps) and About (Reset). Changes apply when you go back home.
 - Pin, unpin and reorder dock apps on the TV: hold OK or press Menu on an app.
 - Round buttons top right: **Wi-Fi** (signal bars; highlighted, it opens into the network name and
   the TV's IP address), **Earphones** (connects or disconnects a paired Bluetooth headset,

@@ -41,4 +41,7 @@
     <string name="sleep_timer_set">The TV will sleep in %1$d minutes</string>
     <string name="sleep_timer_cancel">Cancel timer (%1$d min left)</string>
     <string name="sleep_timer_off">Sleep timer off</string>
+    <string name="np_needs_access">Now playing needs a one-time step on a computer: adb shell settings put secure enabled_notification_listeners com.gathin.tvhome/.MediaWatcherService</string>
+    <string name="home_settings">Home settings</string>
+    <string name="tv_settings">TV settings</string>
 </resources>

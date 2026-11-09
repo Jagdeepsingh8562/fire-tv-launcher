@@ -26,6 +26,7 @@ if [ "$MAKER" = "Amazon" ]; then
     "settings put secure enabled_accessibility_services com.gathin.tvhome/com.gathin.tvhome.HomeRedirectService" \
     "settings put secure accessibility_enabled 1" \
     "dpm set-active-admin com.gathin.tvhome/.AdminReceiver" \
+    "settings put secure enabled_notification_listeners com.gathin.tvhome/com.gathin.tvhome.MediaWatcherService" \
     "am start -n com.gathin.tvhome/.MainActivity" \
     | "$PY" -I ../tools/tv.py --batch
   echo "Installed on Fire TV. Home opens the launcher. To go back to Amazon's home screen, press Menu on"

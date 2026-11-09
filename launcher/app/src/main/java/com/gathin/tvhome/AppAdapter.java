@@ -104,10 +104,11 @@ public class AppAdapter extends RecyclerView.Adapter<AppAdapter.Holder> {
         List<ResolveInfo> found = pm.queryIntentActivities(probe, 0);
         List<Entry> fresh = new ArrayList<>();
         Set<String> seen = new HashSet<>();
+        Set<String> extraHidden = HomePrefs.hiddenApps(ctx);
         for (ResolveInfo ri : found) {
             if (ri.activityInfo == null) continue;
             String pkg = ri.activityInfo.packageName;
-            if (pkg.equals(ctx.getPackageName()) || hidden.contains(pkg)) continue;
+            if (pkg.equals(ctx.getPackageName()) || hidden.contains(pkg) || extraHidden.contains(pkg)) continue;
             // One tile per app: skip extra launcher entries (AirPlay registers three).
             Intent main = pm.getLeanbackLaunchIntentForPackage(pkg);
             ComponentName mainComponent = main != null ? main.getComponent() : null;
@@ -230,11 +231,26 @@ public class AppAdapter extends RecyclerView.Adapter<AppAdapter.Holder> {
         });
     }
 
+    /** The tile for a package, or null when it is not shown (uninstalled or hidden). */
+    Entry entryOf(String pkg) {
+        for (Entry e : items) if (e.pkg.equals(pkg)) return e;
+        return null;
+    }
+
+    /** Opens an app by package, like pressing its tile. False when it is not shown. */
+    boolean open(String pkg) {
+        Entry e = entryOf(pkg);
+        if (e == null) return false;
+        launch(e);
+        return true;
+    }
+
     private void launch(Entry e) {
         Intent i = new Intent(Intent.ACTION_MAIN)
                 .addCategory(Intent.CATEGORY_LEANBACK_LAUNCHER)
                 .setComponent(e.component)
                 .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK | Intent.FLAG_ACTIVITY_RESET_TASK_IF_NEEDED);
+        RecentApps.record(ctx, e.pkg);
         try {
             ctx.startActivity(i);
         } catch (Exception ex) {
