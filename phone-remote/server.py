@@ -187,7 +187,7 @@ def ask(question):
     env = {k: v for k, v in os.environ.items() if k != "ANTHROPIC_API_KEY"}   # use the Claude plan, never bill a key
     with tempfile.TemporaryDirectory() as cwd:   # no project files or CLAUDE.md in reach
         r = subprocess.run([claude, "-p", prompt, "--tools", "WebSearch", "--allowedTools", "WebSearch",
-                            "--no-session-persistence", "--model", "haiku"],
+                            "--no-session-persistence", "--model", "claude-haiku-5-5"],
                            capture_output=True, text=True, timeout=120, env=env, cwd=cwd)
     m = re.search(r"\{.*\}", r.stdout, re.S)
     try:
