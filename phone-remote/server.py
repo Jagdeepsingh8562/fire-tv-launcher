@@ -3,9 +3,11 @@
 
 Open http://<this computer>:5400 on a phone on the same Wi-Fi. Keys, typing and opening apps go to the TV
 over adb; "Ask" hands a sentence ("put on that show about the lawyer with no degree") to Claude Code, which
-picks one installed app and a search phrase, and the server opens that app's search.
+picks one installed app and a search phrase, and the server opens that app's search. The picking is done by
+Gemini (GEMINI_API_KEY) or, without a key, by Claude Code.
 
-Usage:  TV_HOST=192.168.1.26 python3 phone-remote/server.py        (PORT=5400, ADB=adb by default)
+Usage:  python3 phone-remote/server.py     settings come from the environment or a .env file at the repo root
+        (see .env.example): TV_HOST, PORT, ADB, GEMINI_API_KEY, GEMINI_MODEL, AI_PROVIDER
 
 No password: anyone on the Wi-Fi can use it, like the TV remote on the table. Keep it off the internet.
 Ideas from couch-tv (github.com/Seagey/couch-tv, MIT), cut down for Fire OS 5 where its bridge cannot run.
@@ -18,10 +20,35 @@ import subprocess
 import tempfile
 import threading
 import time
+import urllib.error
 import urllib.parse
 import urllib.request
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
+
+def parse_env(text):
+    """KEY=value lines (blank lines, # comments and surrounding quotes allowed) as a dict."""
+    out = {}
+    for line in text.splitlines():
+        line = line.strip()
+        if line and not line.startswith("#") and "=" in line:
+            k, v = line.split("=", 1)
+            out[k.strip()] = v.strip().strip("'\"")
+    return out
+
+
+def load_env(path):
+    """Fill in settings from a .env file; real environment variables win, empty values are ignored."""
+    try:
+        values = parse_env(Path(path).read_text())
+    except OSError:
+        return
+    for k, v in values.items():
+        if v:
+            os.environ.setdefault(k, v)
+
+
+load_env(Path(__file__).resolve().parent.parent / ".env")
 
 TV = os.environ.get("TV_HOST", "192.168.1.26")
 SERIAL = TV if ":" in TV else TV + ":5555"
@@ -45,14 +72,26 @@ APPS = [
     # taps "Search" on the phone, and then keys open Search and type (key_search: keycodes, and a float is a
     # pause in seconds for a screen to load; checked on this
     # stick; Left Up OK opens Search from the side menu, JioHotstar needs one more Up into its search box).
-    {"name": "Netflix", "package": "com.netflix.ninja", "search": None, "key_search": [21, 19, 23, 3.0]},
-    {"name": "JioHotstar", "package": "in.startv.hotstar", "search": None, "key_search": [21, 19, 23, 3.0, 19]},
+    # boot: seconds after a restart before the app can be ready (Netflix is at 100-200% CPU for ~40 s here).
+    # profile: keys that pick the first profile on "Who's watching?" (focus starts on it, so just OK), so the
+    # whole search runs without the person touching anything. Leave it out and the phone asks them to pick.
+    {"name": "Netflix", "package": "com.netflix.ninja", "search": None, "key_search": [21, 19, 23, 3.0], "boot": 45,
+     "profile": [23]},
+    {"name": "JioHotstar", "package": "in.startv.hotstar", "search": None, "key_search": [21, 19, 23, 3.0, 19], "boot": 15},
     {"name": "Prime Video", "package": "com.amazon.firebat", "search": None},
     {"name": "Apple TV", "package": "com.apple.atve.amazon.appletv", "search": None},
     {"name": "JioCinema", "package": "com.jio.media.stb.ondemand", "search": None},
     {"name": "FireMusic", "package": "com.azone.firemusic", "search": None},
 ]
 BY_PACKAGE = {a["package"]: a for a in APPS}
+
+
+STATUS = {"text": "", "busy": False}   # what the phone shows while a key search is under way
+LAUNCHED = {}                          # package -> when we last restarted it
+
+
+def log(msg):
+    print(time.strftime("%H:%M:%S"), msg, flush=True)
 
 
 class Shell:
@@ -88,6 +127,49 @@ def adb(*args, timeout=20):
     return r.stdout
 
 
+def adb_quick(*args, timeout=8):
+    """A one-off adb shell command without reconnecting first; for polling."""
+    r = subprocess.run([ADB, "-s", SERIAL, "shell", *args], capture_output=True, text=True, timeout=timeout)
+    return r.stdout
+
+
+def find_pid(ps_text, package):
+    m = re.search(r"^\S+\s+(\d+)\s.*\s" + re.escape(package) + r"\s*$", ps_text, re.M)
+    return m.group(1) if m else None
+
+
+def cpu_sample(text):
+    """(uptime seconds, process CPU ticks) from `cat /proc/uptime /proc/<pid>/stat`; ticks are 1/100 s."""
+    up, stat = text.splitlines()[:2]
+    rest = stat.rsplit(")", 1)[1].split()   # field n of proc(5) is rest[n-3]; utime 14, stime 15
+    return float(up.split()[0]), int(rest[11]) + int(rest[12])
+
+
+def wait_calm(package, boot=0, timeout=90):
+    """Wait until the app has finished loading: `boot` seconds since we restarted it, then three one-second
+    samples in a row under 60% of a core. Measured here: Netflix runs at 100-200% for ~40 s after launch, then
+    30-50%, then near 0. Proceeds anyway after the timeout."""
+    end = time.time() + timeout
+    pid = prev = None
+    calm = 0
+    while time.time() < end:
+        time.sleep(1)
+        try:
+            if pid is None:
+                pid = find_pid(adb_quick("ps"), package)
+                continue
+            now = cpu_sample(adb_quick("cat", "/proc/uptime", f"/proc/{pid}/stat"))
+        except (ValueError, IndexError, subprocess.TimeoutExpired):
+            pid = prev = None
+            calm = 0
+            continue
+        if prev and now[0] > prev[0]:
+            calm = calm + 1 if (now[1] - prev[1]) / (now[0] - prev[0]) < 60 else 0
+        prev = now
+        if calm >= 3 and time.time() - LAUNCHED.get(package, 0) >= boot:
+            return
+
+
 def shell_quote(s):
     return "'" + s.replace("'", "'\\''") + "'"
 
@@ -110,19 +192,46 @@ def launch(package):
 
 def restart(package):
     adb("am", "force-stop", package)
+    LAUNCHED[package] = time.time()
     launch(package)
 
 
-def key_search(app, query):
-    """From the app's home (a profile already picked), open Search and type the words."""
-    for step in app["key_search"]:
-        if isinstance(step, float):
-            time.sleep(step)
-            continue
-        SHELL.send(f"input keyevent {step}")
-        time.sleep(1.2)
-    time.sleep(1.5)
-    input_text(query)
+def key_search(app, query, pick=False):
+    """From the app's home (a profile already picked), open Search and type the words. Waits for the app to
+    finish loading first, so a tap while it is still starting does not lose the keys. With pick, it is on
+    "Who's watching?" after that wait, so it presses OK on the focused first profile and waits for home."""
+    STATUS.update(text=f"Waiting for {app['name']} to start…", busy=True)
+    try:
+        log(f"key_search {app['name']}: waiting for it to load")
+        wait_calm(app["package"], app.get("boot", 0))
+        if pick:
+            STATUS["text"] = "Picking the first profile…"
+            log("on the profile screen, picking the first profile")
+            time.sleep(2)   # let the screen finish drawing
+            for step in app["profile"]:
+                SHELL.send(f"input keyevent {step}")
+                time.sleep(0.8)
+            STATUS["text"] = f"Waiting for {app['name']} home to load…"
+            time.sleep(8)
+            wait_calm(app["package"])
+        STATUS["text"] = f"Opening {app['name']} search…"
+        log("loaded, sending keys")
+        time.sleep(2)
+        for step in app["key_search"]:
+            if isinstance(step, float):
+                time.sleep(step)
+                continue
+            SHELL.send(f"input keyevent {step}")
+            time.sleep(1.2)
+        time.sleep(1.5)
+        input_text(query)
+        STATUS["text"] = f"Typed “{query}” into {app['name']}"
+        log("typed")
+    except Exception as e:
+        STATUS["text"] = f"Could not search: {e}"
+        log(f"key_search failed: {e}")
+    finally:
+        STATUS["busy"] = False
 
 
 def youtube_first_video(query):
@@ -177,19 +286,78 @@ Reply with ONLY one line of JSON, nothing else:
 {{"say": "<short sentence for the phone, e.g. Opening Suits on Netflix>", "app": "<one package from the list, or null>", "query": "<words to search in that app, or null>", "play": <true when they asked to play one particular song or video, false to just browse or search>}}"""
 
 
-def ask(question):
+def ask_claude(prompt):
     claude = shutil.which(os.environ.get("CLAUDE_BIN", "claude"))
     if not claude:
-        return {"say": "Claude Code is not installed on this computer."}
-    apps = installed()
-    prompt = ASK_PROMPT.format(apps=", ".join(f"{a['name']}: {a['package']}" for a in apps),
-                               q=question.replace('"', "'")[:300])
+        raise RuntimeError("No GEMINI_API_KEY is set and Claude Code is not installed on this computer.")
     env = {k: v for k, v in os.environ.items() if k != "ANTHROPIC_API_KEY"}   # use the Claude plan, never bill a key
     with tempfile.TemporaryDirectory() as cwd:   # no project files or CLAUDE.md in reach
         r = subprocess.run([claude, "-p", prompt, "--tools", "WebSearch", "--allowedTools", "WebSearch",
                             "--no-session-persistence", "--model", "claude-haiku-5-5"],
                            capture_output=True, text=True, timeout=120, env=env, cwd=cwd)
-    m = re.search(r"\{.*\}", r.stdout, re.S)
+    return r.stdout
+
+
+def gemini_text(data):
+    """The reply text of a generateContent response, or "" when it was blocked or empty."""
+    try:
+        return "".join(p.get("text", "") for p in data["candidates"][0]["content"]["parts"])
+    except (KeyError, IndexError, TypeError):
+        return ""
+
+
+def ask_gemini(prompt):
+    """One generateContent call with Google Search grounding. Tries the fast Flash-Lite model first and the full
+    Flash second (the free tier's models are often overloaded or out of quota one at a time). If a plan refuses
+    grounding it asks once more without search (the model then answers from what it knows)."""
+    key = os.environ["GEMINI_API_KEY"]
+    models = [os.environ["GEMINI_MODEL"]] if os.environ.get("GEMINI_MODEL") else \
+        ["gemini-flash-lite-latest", "gemini-flash-latest"]
+
+    def call(model, search):
+        body = {"contents": [{"parts": [{"text": prompt}]}]}
+        if search:
+            body["tools"] = [{"google_search": {}}]
+        req = urllib.request.Request(
+            f"https://generativelanguage.googleapis.com/v1beta/models/{urllib.parse.quote(model)}:generateContent",
+            json.dumps(body).encode(),
+            {"Content-Type": "application/json", "x-goog-api-key": key})   # header, so it never lands in a URL
+        with urllib.request.urlopen(req, timeout=25) as r:
+            return gemini_text(json.load(r))
+
+    why = "no answer"
+    for model in models:
+        try:
+            try:
+                return call(model, True)
+            except urllib.error.HTTPError as e:
+                if e.code not in (400, 403, 429):
+                    raise
+                return call(model, False)
+        except urllib.error.HTTPError as e:
+            try:
+                msg = json.load(e)["error"]["message"]
+            except Exception:
+                msg = ""
+            why = f"Gemini said {e.code}" + (f": {msg[:100]}" if msg else "")
+        except (OSError, ValueError):   # timeout, no network, bad reply
+            why = "Gemini did not answer in time"
+    raise RuntimeError(why)
+
+
+def provider():
+    return os.environ.get("AI_PROVIDER") or ("gemini" if os.environ.get("GEMINI_API_KEY") else "claude")
+
+
+def ask(question):
+    apps = installed()
+    prompt = ASK_PROMPT.format(apps=", ".join(f"{a['name']}: {a['package']}" for a in apps),
+                               q=question.replace('"', "'")[:300])
+    try:
+        text = ask_gemini(prompt) if provider() == "gemini" else ask_claude(prompt)
+    except RuntimeError as e:
+        return {"say": str(e)}
+    m = re.search(r"\{.*\}", text, re.S)
     try:
         plan = json.loads(m.group(0)) if m else {}
     except ValueError:
@@ -207,8 +375,14 @@ def act(plan, allowed):
     searched = open_search(BY_PACKAGE[pkg], query, plan.get("play") is True)
     if query and not searched:
         say += f" (search for “{query}” on the TV)"
+    elif BY_PACKAGE[pkg].get("key_search") and query and BY_PACKAGE[pkg].get("profile"):
+        STATUS.update(text=f"Waiting for {BY_PACKAGE[pkg]['name']} to start…", busy=True)
+        threading.Thread(target=key_search, args=(BY_PACKAGE[pkg], query, True), daemon=True).start()
+        return {"say": say + ". It takes about 45 s to start; I will pick the first profile and search.",
+                "app": pkg, "query": query, "auto": True}
     elif BY_PACKAGE[pkg].get("key_search") and query:
-        return {"say": say + ". Pick your profile on the TV, then tap Search.", "app": pkg, "query": query,
+        return {"say": say + ". It takes about 45 s to start. Pick your profile on the TV, then tap Search.",
+                "app": pkg, "query": query,
                 "then": "Search for " + query}
     return {"say": say, "app": pkg, "query": query}
 
@@ -230,6 +404,8 @@ class Handler(BaseHTTPRequestHandler):
             self.send_header("Content-Length", str(len(page)))
             self.end_headers()
             self.wfile.write(page)
+        elif self.path == "/api/status":
+            self._json(200, STATUS)
         elif self.path == "/api/apps":
             self._json(200, [{"name": a["name"], "package": a["package"]} for a in installed()])
         else:
@@ -280,6 +456,12 @@ if __name__ == "__main__":
         assert BY_PACKAGE["com.netflix.ninja"].get("key_search")
         assert first_video_id('x"videoRenderer":{"videoId":"s3a4OQR-10M","thumbnail"') == "s3a4OQR-10M"
         assert first_video_id("no results here") is None
+        assert find_pid("u0_a4     13657 197   1550616 200664 ffffffff 00000000 S com.netflix.ninja\r\n", "com.netflix.ninja") == "13657"
+        assert find_pid("u0_a4 1 2 3 4 5 6 S com.netflix.ninjaX\n", "com.netflix.ninja") is None
+        assert cpu_sample("2496.61 7846.07\n13657 (m.netflix.ninja) S 197 197 0 0 -1 1077936448 38211 9501 460 80 200 49 21 14 10 -10\n") == (2496.61, 249)
+        assert parse_env("# c\nA=1\n B = 'x y' \nbad\nC=\n") == {"A": "1", "B": "x y", "C": ""}
+        assert gemini_text({"candidates": [{"content": {"parts": [{"text": "{"}, {"text": "}"}]}}]}) == "{}"
+        assert gemini_text({"promptFeedback": {"blockReason": "SAFETY"}}) == ""
         print("selftest ok")
         raise SystemExit
     print(f"Phone remote for {SERIAL} on http://{os.uname().nodename}:{PORT}  (Ctrl+C to stop)")

@@ -21,3 +21,6 @@ launcher/app/src/main/res/drawable-nodpi/dock_prime.png
 launcher/app/src/main/res/drawable-nodpi/dock_airplay.png
 tools/assets/
 screenshots/
+
+# API keys and local settings for the phone remote
+.env

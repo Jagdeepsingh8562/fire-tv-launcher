@@ -67,7 +67,7 @@ A small native Android TV home screen (`com.gathin.tvhome`), built for sets with
   [Outfit](https://fonts.google.com/specimen/Outfit).
 - Weather beside the date (Open-Meteo, free, no key; place in `config.xml`, `weather_latitude` and
   `weather_longitude`).
-- **Phone remote and "put on X"** with Claude, run from a computer at home: [phone-remote/](phone-remote/).
+- **Phone remote and "put on X"** with Gemini or Claude, run from a computer at home: [phone-remote/](phone-remote/).
 - A power button at the right end of the top buttons: **Sleep** (needs the one-time
   `adb shell dpm set-active-admin com.gathin.tvhome/.AdminReceiver`, which `build-and-install.sh` runs),
   **Sleep in 30, 60 or 90 min** (a sleep timer, cancelled from the same menu) and **Restart…**, which

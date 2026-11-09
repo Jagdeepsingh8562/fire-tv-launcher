@@ -111,15 +111,27 @@
     btn.disabled = false;
     const then = document.getElementById('then');
     then.hidden = !r.then;
+    if (r.auto) watch();
     if (r.then) {
       then.textContent = r.then;
       then.onclick = async () => {
         buzz(); then.hidden = true;
         const s = await post('/api/search', {app:r.app, query:r.query});
-        say.textContent = s.error || 'Searching on the TV…';
+        if (s.error) { say.textContent = s.error; return; }
+        watch();
       };
     }
   });
+
+  // The server waits for the app to load (and may pick the profile), then types: show its progress.
+  function watch() {
+    const poll = setInterval(async () => {
+      const st = await fetch('/api/status').then(x => x.json()).catch(() => null);
+      if (!st) return;
+      say.textContent = st.text;
+      if (!st.busy) clearInterval(poll);
+    }, 1500);
+  }
 
   document.getElementById('typeForm').addEventListener('submit', async e => {
     e.preventDefault();
