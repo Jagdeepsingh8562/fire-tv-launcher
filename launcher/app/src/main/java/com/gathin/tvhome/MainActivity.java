@@ -175,8 +175,21 @@ public class MainActivity extends Activity implements AppAdapter.TileListener {
             }
         });
 
-        // Keep the glass glued to its tile while the grid scrolls.
+        // Keep the glass glued to its tile while the grid scrolls, and snap it to the tile's real place once the
+        // scroll stops (summed scroll steps drift, e.g. when Home opens with the grid still scrolled down).
         grid.addOnScrollListener(new RecyclerView.OnScrollListener() {
+            @Override
+            public void onScrollStateChanged(@NonNull RecyclerView rv, int newState) {
+                if (newState != RecyclerView.SCROLL_STATE_IDLE || !glassShown) return;
+                View f = getCurrentFocus();
+                if (f == null || f.getId() != R.id.card) return;
+                Rect r = new Rect(0, 0, f.getWidth(), f.getHeight());
+                root.offsetDescendantRectToMyCoords(f, r);
+                float pad = 6f * density;
+                glassTargetY = r.exactCenterY() - (f.getHeight() * AppAdapter.FOCUS_SCALE + 2 * pad) / 2f;
+                springY.animateToFinalPosition(glassTargetY);
+            }
+
             @Override
             public void onScrolled(@NonNull RecyclerView rv, int dx, int dy) {
                 if (!glassShown) return;
@@ -359,13 +372,11 @@ public class MainActivity extends Activity implements AppAdapter.TileListener {
         // Where the dock rests (grid padding + decoration 6dp + item padding 8dp), minus the band's 16dp margin;
         // not the card's current rect, which is still moving on the first layout or while scrolling back.
         float bandTop = g.top + grid.getPaddingTop() + (6 + 8 - 16) * density;
-        android.util.Log.d("HERODBG", "g=" + g + " padTop=" + grid.getPaddingTop() + " card=" + card + " gridH=" + grid.getHeight() + " heroH=" + heroName.getMeasuredHeight());
         heroName.setX(g.left + bandLeft + 8 * density);
         heroName.setY(bandTop - 6 * density - heroName.getMeasuredHeight());
         if (!heroShown) {
-            heroName.setTranslationY(8 * density);
-            heroName.animate().alpha(1f).translationY(0f).setDuration(260)
-                    .setInterpolator(new DecelerateInterpolator(1.6f)).start();
+            // Fade only: setY() above works through translationY, so animating that would undo it.
+            heroName.animate().alpha(1f).setDuration(260).start();
             heroShown = true;
         }
     }

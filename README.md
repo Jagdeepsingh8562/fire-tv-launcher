@@ -40,12 +40,11 @@ step with screenshots from the TV. If you'd rather do it by hand, the pieces are
 
 A small native Android TV home screen (`com.gathin.tvhome`), built for sets with 1 GB of RAM:
 
-- A mountain range drawn in code (no photos): dawn, day, dusk and a starry night with a crescent
-  moon, following the time of day. The ridges shift slightly as focus moves and sink when you
-  scroll the app grid. The greeting changes with it ("Good evening, Alex").
-- A macOS-style dock of up to four apps with square icons. The focused icon grows and lifts, its
-  neighbours grow a little, and a capsule label shows its name. Press Down for the rest of your
-  apps.
+- Ambient-glass look (ported from CleanYourTV's `ambient-glass` theme, since its launcher needs Android 8):
+  eight landscape photos rotating every 5 minutes with their names under the buttons (CC0 / Unsplash,
+  see `launcher/app/src/main/assets/wallpapers/` and [CREDITS.md](CREDITS.md)), a frosted-glass dock
+  band of five wide app banners, and the focused dock app's name in large light type above it.
+- Press Down for the rest of your apps in the same five-column grid.
 - Pin, unpin and reorder dock apps on the TV: hold OK or press Menu on an app.
 - Round buttons top right: **Inputs** (HDMI ports, AV and Live TV), **Wi-Fi** (signal bars, plus a
   warning when there is no internet), **Earphones** (connects or disconnects a paired Bluetooth
