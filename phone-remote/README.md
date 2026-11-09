@@ -16,7 +16,8 @@ Open `http://<this computer's address>:5400` on a phone on the same Wi-Fi and ad
 - **The computer must stay on and awake** while you use it.
 - **Ask:** Claude gets web search only (to check which app streams a title in India), no files or shell. Its
   answer is checked: it can only choose an app from `APPS` in `server.py` and a plain search phrase.
-  YouTube (SmartTube) opens straight to search. Netflix and JioHotstar restart (they drop links at
+  YouTube (SmartTube): "play X" finds YouTube's top result for X and plays it; anything vaguer opens the
+  search results. Netflix and JioHotstar restart (they drop links at
   "Who's watching?"): pick your profile on the TV, tap **Search** on the phone, and it opens their Search and
   types the title. The other apps open on their home page and the
   phone says what to search for. Add an app or a search link in `APPS`.

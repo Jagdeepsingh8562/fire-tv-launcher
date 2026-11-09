@@ -19,6 +19,7 @@ import tempfile
 import threading
 import time
 import urllib.parse
+import urllib.request
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 
@@ -124,8 +125,33 @@ def key_search(app, query):
     input_text(query)
 
 
-def open_search(app, query):
-    """Open the app's own search for the words, or just the app when it has no search link."""
+def youtube_first_video(query):
+    """The id of YouTube's top video result for the words, or None. Read from the search page's own data."""
+    req = urllib.request.Request(
+        "https://www.youtube.com/results?search_query=" + urllib.parse.quote_plus(query),
+        headers={"User-Agent": "Mozilla/5.0", "Accept-Language": "en"})
+    try:
+        with urllib.request.urlopen(req, timeout=15) as r:
+            return first_video_id(r.read().decode("utf-8", "ignore"))
+    except Exception:
+        return None
+
+
+def first_video_id(html):
+    m = re.search(r'"videoRenderer":\{"videoId":"([\w-]{11})"', html)
+    return m.group(1) if m else None
+
+
+def open_search(app, query, play=False):
+    """Open the app's own search for the words, or just the app when it has no search link. With play, YouTube
+    opens the top video result itself instead of the results page."""
+    if play and query and app["package"] == "org.smarttube.stable":
+        vid = youtube_first_video(query)
+        if vid:
+            out = adb("am", "start", "-a", "android.intent.action.VIEW", "-d",
+                      shell_quote("https://www.youtube.com/watch?v=" + vid), "-p", app["package"])
+            if "Error" not in out:
+                return True
     if app.get("key_search") and query:
         restart(app["package"])   # always from the top, so "Who's watching?" then home is where the keys start
         return True
@@ -148,7 +174,7 @@ The person said: "{q}"
 Work out the actual title or thing they mean. If it is a film or series, pick the app above that streams it
 in India (search the web if unsure). Music, clips, trailers and anything else free go to YouTube.
 Reply with ONLY one line of JSON, nothing else:
-{{"say": "<short sentence for the phone, e.g. Opening Suits on Netflix>", "app": "<one package from the list, or null>", "query": "<words to search in that app, or null>"}}"""
+{{"say": "<short sentence for the phone, e.g. Opening Suits on Netflix>", "app": "<one package from the list, or null>", "query": "<words to search in that app, or null>", "play": <true when they asked to play one particular song or video, false to just browse or search>}}"""
 
 
 def ask(question):
@@ -161,7 +187,7 @@ def ask(question):
     env = {k: v for k, v in os.environ.items() if k != "ANTHROPIC_API_KEY"}   # use the Claude plan, never bill a key
     with tempfile.TemporaryDirectory() as cwd:   # no project files or CLAUDE.md in reach
         r = subprocess.run([claude, "-p", prompt, "--tools", "WebSearch", "--allowedTools", "WebSearch",
-                            "--no-session-persistence", "--model", "sonnet"],
+                            "--no-session-persistence", "--model", "haiku"],
                            capture_output=True, text=True, timeout=120, env=env, cwd=cwd)
     m = re.search(r"\{.*\}", r.stdout, re.S)
     try:
@@ -178,7 +204,7 @@ def act(plan, allowed):
     if pkg not in allowed:
         return {"say": say}
     query = re.sub(r"[^\w .,'&:!?\-]", "", str(plan.get("query") or ""))[:100].strip()
-    searched = open_search(BY_PACKAGE[pkg], query)
+    searched = open_search(BY_PACKAGE[pkg], query, plan.get("play") is True)
     if query and not searched:
         say += f" (search for “{query}” on the TV)"
     elif BY_PACKAGE[pkg].get("key_search") and query:
@@ -252,6 +278,8 @@ if __name__ == "__main__":
         assert act({"say": None}, set())["say"].startswith("Sorry")
         assert shell_quote("a'b") == "'a'\\''b'"
         assert BY_PACKAGE["com.netflix.ninja"].get("key_search")
+        assert first_video_id('x"videoRenderer":{"videoId":"s3a4OQR-10M","thumbnail"') == "s3a4OQR-10M"
+        assert first_video_id("no results here") is None
         print("selftest ok")
         raise SystemExit
     print(f"Phone remote for {SERIAL} on http://{os.uname().nodename}:{PORT}  (Ctrl+C to stop)")
