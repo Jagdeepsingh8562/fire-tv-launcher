@@ -5,18 +5,14 @@ import android.content.Context;
 import android.content.Intent;
 import android.content.pm.PackageManager;
 import android.content.pm.ResolveInfo;
-import android.graphics.Bitmap;
-import android.graphics.Canvas;
-import android.graphics.Color;
 import android.graphics.Outline;
-import android.graphics.Rect;
 import android.graphics.drawable.Drawable;
 import android.view.KeyEvent;
 import android.view.LayoutInflater;
 import android.view.View;
 import android.view.ViewGroup;
 import android.view.ViewOutlineProvider;
-import android.view.animation.OvershootInterpolator;
+import android.view.animation.DecelerateInterpolator;
 import android.widget.FrameLayout;
 import android.widget.ImageView;
 import android.widget.TextView;
@@ -50,36 +46,34 @@ public class AppAdapter extends RecyclerView.Adapter<AppAdapter.Holder> {
         void onTileMenu(int position, View card);
     }
 
-    // Optional square icons, drawn locally by tools/make_dock_icons.py and kept out of git (they are trademarked
-    // logos). Looked up by name so the app builds without them; missing ones fall back to the app's own icon.
-    private static final Map<String, String> DOCK_ICONS = new HashMap<>();
+    // SmartTube is this TV's YouTube: it takes YouTube's name and banner (from the stock app, which stays hidden).
+    private static final Map<String, String> LABELS = new HashMap<>();
+    private static final Map<String, String> BANNER_FROM = new HashMap<>();
     static {
-        DOCK_ICONS.put("com.amazon.firetv.youtube", "dock_youtube");
-        DOCK_ICONS.put("com.netflix.ninja", "dock_netflix");
-        DOCK_ICONS.put("com.amazon.firebat", "dock_prime");
-        DOCK_ICONS.put("com.apple.airplay.amazon.airplay", "dock_airplay");
+        LABELS.put("org.smarttube.stable", "YouTube");
+        BANNER_FROM.put("org.smarttube.stable", "com.amazon.firetv.youtube");
     }
 
     static final class Entry {
         final String label;
         final ComponentName component;
         final String pkg;
-        /** Square dock art, or null: then the app's own icon sits on a graphite tile. */
-        final Drawable square;
+        /** Wide art filling the tile: the app's TV banner, or its icon when that is already landscape. */
+        final Drawable art;
+        /** Square icon shown small on a slate tile when the app has no wide art. */
         final Drawable icon;
-        int ambient;
 
-        Entry(String label, ComponentName component, Drawable square, Drawable icon) {
+        Entry(String label, ComponentName component, Drawable art, Drawable icon) {
             this.label = label;
             this.component = component;
             this.pkg = component.getPackageName();
-            this.square = square;
+            this.art = art;
             this.icon = icon;
         }
     }
 
-    static final float FOCUS_SCALE = 1.10f;
-    static final float CORNER_RATIO = 0.225f;
+    static final float FOCUS_SCALE = 1.08f;
+    static final float CORNER_RATIO = 0.15f;
 
     private final Context ctx;
     private final TileListener listener;
@@ -110,22 +104,20 @@ public class AppAdapter extends RecyclerView.Adapter<AppAdapter.Holder> {
         List<ResolveInfo> found = pm.queryIntentActivities(probe, 0);
         List<Entry> fresh = new ArrayList<>();
         Set<String> seen = new HashSet<>();
+        Set<String> extraHidden = HomePrefs.hiddenApps(ctx);
         for (ResolveInfo ri : found) {
             if (ri.activityInfo == null) continue;
             String pkg = ri.activityInfo.packageName;
-            if (pkg.equals(ctx.getPackageName()) || hidden.contains(pkg)) continue;
+            if (pkg.equals(ctx.getPackageName()) || hidden.contains(pkg) || extraHidden.contains(pkg)) continue;
             // One tile per app: skip extra launcher entries (AirPlay registers three).
             Intent main = pm.getLeanbackLaunchIntentForPackage(pkg);
             ComponentName mainComponent = main != null ? main.getComponent() : null;
             if (mainComponent != null && !mainComponent.getClassName().equals(ri.activityInfo.name)) continue;
             if (!seen.add(pkg)) continue;
             Drawable icon = ri.loadIcon(pm);
-            String label = String.valueOf(ri.loadLabel(pm));
-            String squareName = DOCK_ICONS.get(pkg);
-            int square = squareName == null ? 0
-                    : ctx.getResources().getIdentifier(squareName, "drawable", ctx.getPackageName());
-            fresh.add(new Entry(label, new ComponentName(pkg, ri.activityInfo.name),
-                    square != 0 ? ctx.getDrawable(square) : null, icon));
+            Drawable art = wideArt(pm, BANNER_FROM.containsKey(pkg) ? BANNER_FROM.get(pkg) : pkg, ri, icon);
+            String label = LABELS.containsKey(pkg) ? LABELS.get(pkg) : String.valueOf(ri.loadLabel(pm));
+            fresh.add(new Entry(label, new ComponentName(pkg, ri.activityInfo.name), art, icon));
         }
         Collections.sort(fresh, (a, b) -> {
             int fa = pinned.indexOf(a.pkg), fb = pinned.indexOf(b.pkg);
@@ -142,6 +134,20 @@ public class AppAdapter extends RecyclerView.Adapter<AppAdapter.Holder> {
         while (docked < items.size() && pinned.contains(items.get(docked).pkg)) docked++;
         dockCount = Math.min(docked, maxDock);
         notifyDataSetChanged();
+    }
+
+    /** The banner of {@code artPkg}, else a landscape launcher icon (most Fire TV apps ship one), else null. */
+    private static Drawable wideArt(PackageManager pm, String artPkg, ResolveInfo ri, Drawable icon) {
+        try {
+            Drawable b = pm.getApplicationBanner(artPkg);
+            if (b == null && !artPkg.equals(ri.activityInfo.packageName)) b = pm.getApplicationIcon(artPkg);
+            if (b == null) b = ri.activityInfo.loadBanner(pm);
+            if (b != null) return b;
+        } catch (PackageManager.NameNotFoundException ignored) {
+            // the art source is not installed: fall through to this app's own icon
+        }
+        int w = icon != null ? icon.getIntrinsicWidth() : 0, h = icon != null ? icon.getIntrinsicHeight() : 0;
+        return h > 0 && w >= h * 1.4f ? icon : null;
     }
 
     // ---- dock editing ----------------------------------------------------------------------------
@@ -167,7 +173,7 @@ public class AppAdapter extends RecyclerView.Adapter<AppAdapter.Holder> {
     boolean pin(String pkg) {
         if (pinned.contains(pkg)) return true;
         if (dockCount >= maxDock) return false;
-        pinned.removeIf(p -> positionOf(p) < 0);   // forget uninstalled pins so they don't hold slots
+        for (java.util.Iterator<String> it = pinned.iterator(); it.hasNext(); ) if (positionOf(it.next()) < 0) it.remove();   // forget uninstalled pins so they don't hold slots
         pinned.add(pkg);
         saveAndReload();
         return true;
@@ -209,17 +215,14 @@ public class AppAdapter extends RecyclerView.Adapter<AppAdapter.Holder> {
         h.card.setScaleX(1f);
         h.card.setScaleY(1f);
         h.card.setTranslationY(0f);
-        h.shadow.setVisibility(View.VISIBLE);
-        h.shadow.setScaleX(1f);
-        h.shadow.setScaleY(1f);
-        h.shadow.setTranslationY(0f);
-        h.label.setVisibility(View.GONE);
-        boolean art = e.square != null;
+        boolean art = e.art != null;
         h.card.setBackground(art ? null : ctx.getDrawable(R.drawable.dock_tile_bg));
-        h.banner.setImageDrawable(e.square);
+        h.banner.setImageDrawable(e.art);
         h.banner.setVisibility(art ? View.VISIBLE : View.GONE);
         h.icon.setImageDrawable(art ? null : e.icon);
         h.icon.setVisibility(art ? View.GONE : View.VISIBLE);
+        h.label.setText(e.label);
+        h.label.setVisibility(art ? View.GONE : View.VISIBLE);
         h.card.setOnClickListener(v -> launch(e));
         h.card.setOnLongClickListener(v -> {
             int pos = h.getBindingAdapterPosition();
@@ -228,11 +231,26 @@ public class AppAdapter extends RecyclerView.Adapter<AppAdapter.Holder> {
         });
     }
 
+    /** The tile for a package, or null when it is not shown (uninstalled or hidden). */
+    Entry entryOf(String pkg) {
+        for (Entry e : items) if (e.pkg.equals(pkg)) return e;
+        return null;
+    }
+
+    /** Opens an app by package, like pressing its tile. False when it is not shown. */
+    boolean open(String pkg) {
+        Entry e = entryOf(pkg);
+        if (e == null) return false;
+        launch(e);
+        return true;
+    }
+
     private void launch(Entry e) {
         Intent i = new Intent(Intent.ACTION_MAIN)
                 .addCategory(Intent.CATEGORY_LEANBACK_LAUNCHER)
                 .setComponent(e.component)
                 .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK | Intent.FLAG_ACTIVITY_RESET_TASK_IF_NEEDED);
+        RecentApps.record(ctx, e.pkg);
         try {
             ctx.startActivity(i);
         } catch (Exception ex) {
@@ -249,59 +267,8 @@ public class AppAdapter extends RecyclerView.Adapter<AppAdapter.Holder> {
         return position >= 0 && position < items.size() ? items.get(position).label : "";
     }
 
-    /** A vivid colour sampled from the app's banner (or icon), cached per entry. */
-    int ambientColorAt(int position) {
-        if (position < 0 || position >= items.size()) return 0xFF444444;
-        Entry e = items.get(position);
-        if (e.ambient == 0) e.ambient = vividColor(e.square != null ? e.square : e.icon);
-        return e.ambient;
-    }
-
-    private static int vividColor(Drawable live) {
-        if (live == null) return 0xFF444444;
-        // Draw a private copy: changing the bounds of the drawable an ImageView shows would blank the tile.
-        Drawable d = live.getConstantState() != null ? live.getConstantState().newDrawable().mutate() : live;
-        Rect saved = new Rect(d.getBounds());
-        int n = 12;
-        Bitmap bmp = Bitmap.createBitmap(n, n, Bitmap.Config.ARGB_8888);
-        Canvas c = new Canvas(bmp);
-        d.setBounds(0, 0, n, n);
-        d.draw(c);
-        d.setBounds(saved);
-        float[] hsv = new float[3];
-        int best = 0xFF444444;
-        float bestScore = -1f;
-        long r = 0, g = 0, b = 0;
-        for (int y = 0; y < n; y++) {
-            for (int x = 0; x < n; x++) {
-                int p = bmp.getPixel(x, y);
-                r += Color.red(p);
-                g += Color.green(p);
-                b += Color.blue(p);
-                Color.colorToHSV(p, hsv);
-                float score = hsv[1] * Math.min(1f, hsv[2] * 1.4f);   // saturated and not too dark
-                if (score > bestScore) {
-                    bestScore = score;
-                    best = p;
-                }
-            }
-        }
-        bmp.recycle();
-        if (bestScore < 0.25f) {   // nearly monochrome banner (e.g. white): use its average, lifted
-            int avg = Color.rgb((int) (r / (n * n)), (int) (g / (n * n)), (int) (b / (n * n)));
-            Color.colorToHSV(avg, hsv);
-            hsv[2] = Math.max(hsv[2], 0.55f);
-            return Color.HSVToColor(hsv);
-        }
-        Color.colorToHSV(best, hsv);
-        hsv[1] = Math.min(1f, hsv[1] * 1.1f);
-        hsv[2] = Math.max(0.5f, hsv[2]);
-        return Color.HSVToColor(hsv);
-    }
-
     static final class Holder extends RecyclerView.ViewHolder {
         final View card;
-        final View shadow;
         final ImageView banner;
         final ImageView icon;
         final TextView label;
@@ -310,11 +277,12 @@ public class AppAdapter extends RecyclerView.Adapter<AppAdapter.Holder> {
         Holder(View v, TileListener listener, AppAdapter owner) {
             super(v);
             card = v.findViewById(R.id.card);
-            shadow = v.findViewById(R.id.shadow);
             banner = v.findViewById(R.id.banner);
             icon = v.findViewById(R.id.icon);
             label = v.findViewById(R.id.label);
             name = v.findViewById(R.id.name);
+            name.setTypeface(Fonts.medium(v.getContext()));
+            label.setTypeface(Fonts.medium(v.getContext()));
 
             final float density = v.getResources().getDisplayMetrics().density;
             card.setOutlineProvider(new ViewOutlineProvider() {
@@ -340,15 +308,12 @@ public class AppAdapter extends RecyclerView.Adapter<AppAdapter.Holder> {
             });
 
             card.setOnFocusChangeListener((view, focused) -> {
-                // Dock icons are magnified as a group by MainActivity; grid tiles scale themselves.
-                boolean inDock = owner.isDocked(getBindingAdapterPosition());
+                // Ambient-glass: a gentle grow, no overshoot.
                 float s = focused ? FOCUS_SCALE : 1.0f;
-                if (!inDock) {
-                    view.animate().scaleX(s).scaleY(s)
-                            .setDuration(focused ? 260 : 180)
-                            .setInterpolator(new OvershootInterpolator(focused ? 1.6f : 0f))
-                            .start();
-                }
+                view.animate().scaleX(s).scaleY(s)
+                        .setDuration(focused ? 240 : 180)
+                        .setInterpolator(new DecelerateInterpolator(1.8f))
+                        .start();
                 name.animate().alpha(focused ? 1f : 0f)
                         .translationY(focused ? density * 4f : -density * 6f)
                         .setDuration(220).start();

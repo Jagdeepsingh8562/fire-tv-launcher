@@ -40,16 +40,38 @@ step with screenshots from the TV. If you'd rather do it by hand, the pieces are
 
 A small native Android TV home screen (`com.gathin.tvhome`), built for sets with 1 GB of RAM:
 
-- A full-screen photo that changes with the time of day: morning, afternoon, evening and night.
-  The greeting changes with it ("Good evening, Alex").
-- A macOS-style dock of up to four apps with square icons. The focused icon grows and lifts, its
-  neighbours grow a little, and a capsule label shows its name. Press Down for the rest of your
-  apps.
+- Ambient-glass look (ported from CleanYourTV's `ambient-glass` theme, since its launcher needs Android 8):
+  a frosted-glass dock band of five wide app banners, the focused dock app's name in large light type
+  above it, and a glass highlight that glides between tiles. Press Down for the rest of your apps in
+  the same five-column grid.
+- Pictures from [couch-tv](https://github.com/Seagey/couch-tv): its five scenes (Night, Golden hour,
+  Waterline, Fog, Rainforest dawn) plus eight landscape photos, a new one every 5 minutes (changeable).
+  **Big clock** (on by default): the date and a huge thin clock behind the scenery, so peaks and hills
+  overlap its bottom edge, as in couch-tv's Night look. **Small clock** is the older top-left one.
+- **Keep watching** (after couch-tv): a row of glass cards above the dock for the apps you opened from
+  this home, newest first. Fire OS 5 keeps no watch history, so it is apps only, not shows. Up from the
+  dock enters it.
+- **Now playing** card, first in that row, while music plays in another app: cover, song, artist and
+  previous / play-pause / next. It needs notification access, which `build-and-install.sh` switches on
+  (`adb shell settings put secure enabled_notification_listeners com.gathin.tvhome/com.gathin.tvhome.MediaWatcherService`).
+  When an app sends only a YouTube video id (SmartTube does, for a video opened from a link), the title,
+  channel and thumbnail are looked up once from YouTube's public oEmbed; with no details at all the card shows
+  the app's name and Playing or Paused.
+- **Home settings** on the TV: the Settings button opens **Home settings** or **TV settings**. Look (clock
+  style and 12 or 24 hour), Pictures (each one on or off, how often they change), Weather (on or off, °C or
+  °F, search for a town), Cards, Apps (hide apps) and About (Reset). Changes apply when you go back home.
 - Pin, unpin and reorder dock apps on the TV: hold OK or press Menu on an app.
-- Round buttons top right: **Inputs** (HDMI ports, AV and Live TV), **Wi-Fi** (signal bars, plus a
-  warning when there is no internet) and **Settings**. Greeting, clock and date top left, set in
-  [Open Sans](https://fonts.google.com/specimen/Open+Sans).
-- A screensaver of the same photos with a slow zoom, a crossfade every 20 seconds and a clock.
+- Round buttons top right: **Wi-Fi** (signal bars; highlighted, it opens into the network name and
+  the TV's IP address), **Earphones** (connects or disconnects a paired Bluetooth headset,
+  `bt_device_name` in config.xml) and **Settings**. Greeting, clock and date top left, set in
+  [Outfit](https://fonts.google.com/specimen/Outfit).
+- Weather beside the date (Open-Meteo, free, no key; place in `config.xml`, `weather_latitude` and
+  `weather_longitude`).
+- **Phone remote and "put on X"** with Claude, run from a computer at home: [phone-remote/](phone-remote/).
+- A power button at the right end of the top buttons: **Sleep** (needs the one-time
+  `adb shell dpm set-active-admin com.gathin.tvhome/.AdminReceiver`, which `build-and-install.sh` runs),
+  **Sleep in 30, 60 or 90 min** (a sleep timer, cancelled from the same menu) and **Restart…**, which
+  opens Fire TV's My Fire TV screen.
 
 Configure it in [`launcher/app/src/main/res/values/config.xml`](launcher/app/src/main/res/values/config.xml):
 the starting dock, hidden apps, Live TV package and columns. To put your name in the greeting, add
@@ -99,14 +121,12 @@ tools/restore.sh examples/xiaomi-mi-tv-4a/debloat.txt        # undo it, restore 
 Fire OS is Android underneath, but it guards its home screen. Tested on a Hisense Fire TV Edition
 (Fire OS 8, Android 11, model AFTOLCBC82).
 
-![Amazon screensaver (top) and the launcher's screensaver (bottom)](docs/firetv-screensaver-before-after.jpg)
-
 To set it up:
 
 1. On the TV, open **Settings → Device & Software → About**, select the device name seven times,
    then go back to **Developer Options** and turn on **ADB debugging**.
-2. Run `TV_HOST=<tv ip> launcher/build-and-install.sh`. On Fire TV it installs the launcher, turns
-   on its Home redirect and sets its screensaver. It leaves Amazon's launcher alone.
+2. Run `TV_HOST=<tv ip> launcher/build-and-install.sh`. On Fire TV it installs the launcher and
+   turns on its Home redirect. It leaves Amazon's launcher alone.
 3. Optional: disable the ad and telemetry packages with
    `tools/disable.sh examples/hisense-fire-tv-AFTOLCBC82/debloat.txt`.
 
@@ -124,6 +144,9 @@ How it differs from Android TV:
   before you connect again.
 - **Some packages are protected.** Fire OS refuses to disable the four packages listed in the
   example debloat list. Undo the rest with `tools/restore.sh` and the same list.
+- **Old Fire OS 5 sticks (e.g. AFTT, Android 5.1)** block `pm disable`, `pm hide`, `pm uninstall` and the
+  accessibility Home redirect, so no debloat and Home keeps opening Amazon's screen. The launcher still
+  runs (minSdk 22) and opens itself after boot (BootReceiver) and is listed in Apps: open Apps & Games, highlight it, press Menu, choose Move to front.
 - **AirPlay has no screen of its own.** The AirPlay tile opens nothing, and casting from an iPhone
   works anyway.
 
@@ -141,4 +164,4 @@ Add your TV's debloat list, improve the launcher, or sharpen the prompt. See
 ## Licence
 
 MIT, see [`LICENSE`](LICENSE). The Outfit and Open Sans typefaces are under the SIL Open Font
-License, see `launcher/FONT-LICENSE-OFL.txt`. Photo credits are in [`CREDITS.md`](CREDITS.md).
+License, see `launcher/FONT-LICENSE-OFL.txt`. Credits are in [`CREDITS.md`](CREDITS.md).

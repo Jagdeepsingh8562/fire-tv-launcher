@@ -1,5 +1,7 @@
 <?xml version="1.0" encoding="utf-8"?>
-<!-- Indicator under the focused dock icon. -->
-<shape xmlns:android="http://schemas.android.com/apk/res/android" android:shape="oval">
-    <solid android:color="#D9FFFFFF" />
-</shape>
+<!-- Summit marker under the focused dock app: a small amber peak. -->
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="12dp" android:height="7dp"
+    android:viewportWidth="12" android:viewportHeight="7">
+    <path android:fillColor="#FFF5B451" android:pathData="M6,0 L12,7 L0,7 Z" />
+</vector>

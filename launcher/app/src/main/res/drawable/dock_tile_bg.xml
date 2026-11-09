@@ -1,5 +1,5 @@
 <?xml version="1.0" encoding="utf-8"?>
-<!-- Graphite face for apps without square dock art: their own icon sits centred on it. -->
+<!-- Card face for apps without wide art: smoky glass. -->
 <shape xmlns:android="http://schemas.android.com/apk/res/android" android:shape="rectangle">
-    <gradient android:angle="270" android:startColor="#FF58585E" android:endColor="#FF28282C" />
+    <gradient android:angle="270" android:startColor="#B3323846" android:endColor="#B31A1E28" />
 </shape>
