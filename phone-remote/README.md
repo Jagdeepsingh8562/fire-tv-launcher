@@ -27,9 +27,11 @@ Open `http://<this computer's address>:5400` on a phone on the same Wi-Fi and ad
   logged. Whoever answers, the reply is checked: it can only choose an app from `APPS` in `server.py` and a plain search phrase.
   YouTube (SmartTube): "play X" finds YouTube's top result for X and plays it; anything vaguer opens the
   search results. Netflix and JioHotstar restart (they drop links at
-  "Who's watching?"): pick your profile on the TV, tap **Search** on the phone, and it waits until the app has finished loading (it watches the app's CPU,
-  since Netflix shows nothing on the stick while it starts; about 45 s cold) before it opens their Search and
-  types the title. The other apps open on their home page and the
+  "Who's watching?"). They then wait until the app has finished loading (the server watches its CPU, since
+  Netflix shows nothing on the stick while it starts; about 45 s cold). Netflix has `profile` keys in `APPS`, so
+  it then picks the first profile itself, waits for home, opens Search and types the title, with no touch
+  needed (the phone shows each step). JioHotstar has none: pick your profile on the TV and tap **Search** on
+  the phone. Do not use the `profile` keys for an account with a single profile and no "Who's watching?". The other apps open on their home page and the
   phone says what to search for. Add an app or a search link in `APPS`.
 - **No password:** anyone on your Wi-Fi can use it, like the TV remote on the table. Never forward a port
   to it. Put guests on a guest network.

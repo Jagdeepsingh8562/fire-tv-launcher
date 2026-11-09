@@ -73,7 +73,10 @@ APPS = [
     # pause in seconds for a screen to load; checked on this
     # stick; Left Up OK opens Search from the side menu, JioHotstar needs one more Up into its search box).
     # boot: seconds after a restart before the app can be ready (Netflix is at 100-200% CPU for ~40 s here).
-    {"name": "Netflix", "package": "com.netflix.ninja", "search": None, "key_search": [21, 19, 23, 3.0], "boot": 45},
+    # profile: keys that pick the first profile on "Who's watching?" (Left x4 to the first one, then OK), so the
+    # whole search runs without the person touching anything. Leave it out and the phone asks them to pick.
+    {"name": "Netflix", "package": "com.netflix.ninja", "search": None, "key_search": [21, 19, 23, 3.0], "boot": 45,
+     "profile": [21, 21, 21, 21, 23]},
     {"name": "JioHotstar", "package": "in.startv.hotstar", "search": None, "key_search": [21, 19, 23, 3.0, 19], "boot": 15},
     {"name": "Prime Video", "package": "com.amazon.firebat", "search": None},
     {"name": "Apple TV", "package": "com.apple.atve.amazon.appletv", "search": None},
@@ -193,13 +196,24 @@ def restart(package):
     launch(package)
 
 
-def key_search(app, query):
+def key_search(app, query, pick=False):
     """From the app's home (a profile already picked), open Search and type the words. Waits for the app to
-    finish loading first, so a tap while it is still starting does not lose the keys."""
-    STATUS.update(text=f"Waiting for {app['name']} to finish loading…", busy=True)
+    finish loading first, so a tap while it is still starting does not lose the keys. With pick, it is on
+    "Who's watching?" after that wait, so it chooses the first profile itself and waits for home."""
+    STATUS.update(text=f"Waiting for {app['name']} to start…", busy=True)
     try:
         log(f"key_search {app['name']}: waiting for it to load")
         wait_calm(app["package"], app.get("boot", 0))
+        if pick:
+            STATUS["text"] = "Picking the first profile…"
+            log("on the profile screen, picking the first profile")
+            time.sleep(2)   # let the screen finish drawing
+            for step in app["profile"]:
+                SHELL.send(f"input keyevent {step}")
+                time.sleep(0.8)
+            STATUS["text"] = f"Waiting for {app['name']} home to load…"
+            time.sleep(8)
+            wait_calm(app["package"])
         STATUS["text"] = f"Opening {app['name']} search…"
         log("loaded, sending keys")
         time.sleep(2)
@@ -361,6 +375,11 @@ def act(plan, allowed):
     searched = open_search(BY_PACKAGE[pkg], query, plan.get("play") is True)
     if query and not searched:
         say += f" (search for “{query}” on the TV)"
+    elif BY_PACKAGE[pkg].get("key_search") and query and BY_PACKAGE[pkg].get("profile"):
+        STATUS.update(text=f"Waiting for {BY_PACKAGE[pkg]['name']} to start…", busy=True)
+        threading.Thread(target=key_search, args=(BY_PACKAGE[pkg], query, True), daemon=True).start()
+        return {"say": say + ". It takes about 45 s to start; I will pick the first profile and search.",
+                "app": pkg, "query": query, "auto": True}
     elif BY_PACKAGE[pkg].get("key_search") and query:
         return {"say": say + ". It takes about 45 s to start. Pick your profile on the TV, then tap Search.",
                 "app": pkg, "query": query,
