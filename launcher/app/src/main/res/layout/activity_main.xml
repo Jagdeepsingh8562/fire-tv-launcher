@@ -144,6 +144,34 @@
                         android:fontVariationSettings="'wght' 400"
                         android:letterSpacing="0.14"
                         android:textAllCaps="true" />
+
+                    <LinearLayout
+                        android:id="@+id/weather"
+                        android:layout_width="wrap_content"
+                        android:layout_height="wrap_content"
+                        android:layout_gravity="bottom"
+                        android:layout_marginBottom="10dp"
+                        android:layout_marginStart="18dp"
+                        android:gravity="center_vertical"
+                        android:orientation="horizontal"
+                        android:visibility="gone">
+
+                        <ImageView
+                            android:id="@+id/weatherIcon"
+                            android:layout_width="20dp"
+                            android:layout_height="20dp"
+                            android:contentDescription="@null" />
+
+                        <TextView
+                            android:id="@+id/weatherTemp"
+                            android:layout_width="wrap_content"
+                            android:layout_height="wrap_content"
+                            android:layout_marginStart="7dp"
+                            android:textColor="#D9FFFFFF"
+                            android:textSize="16sp"
+                            android:shadowColor="#99000000"
+                            android:shadowRadius="8" />
+                    </LinearLayout>
                 </LinearLayout>
             </LinearLayout>
 

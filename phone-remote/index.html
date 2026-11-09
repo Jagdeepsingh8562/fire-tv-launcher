@@ -1,0 +1,133 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="theme-color" content="#05070C">
+<title>TV Remote</title>
+<style>
+  :root { --bg:#05070C; --glass:rgba(255,255,255,.08); --rim:rgba(255,255,255,.16); --text:#F4F6FA; --dim:rgba(244,246,250,.6); }
+  * { box-sizing:border-box; -webkit-tap-highlight-color:transparent; }
+  body { margin:0; min-height:100vh; background:radial-gradient(120% 70% at 50% 0%, #1b2a44 0%, var(--bg) 60%);
+         color:var(--text); font:16px/1.4 -apple-system, "Segoe UI", Roboto, sans-serif;
+         padding:max(16px, env(safe-area-inset-top)) 16px max(24px, env(safe-area-inset-bottom)); }
+  main { max-width:420px; margin:0 auto; display:flex; flex-direction:column; gap:18px; }
+  .glass { background:var(--glass); border:1px solid var(--rim); border-radius:22px; }
+  button { font:inherit; color:var(--text); background:var(--glass); border:1px solid var(--rim); border-radius:16px;
+           padding:12px; cursor:pointer; touch-action:manipulation; transition:transform .08s, background .15s; }
+  button:active { transform:scale(.94); background:rgba(255,255,255,.2); }
+  .ask { display:flex; gap:8px; padding:8px; }
+  .ask input, .type input { flex:1; min-width:0; font:inherit; color:var(--text); background:transparent; border:0; outline:0; padding:10px; }
+  .ask input::placeholder, .type input::placeholder { color:var(--dim); }
+  .ask button { background:#fff; color:#0F1724; font-weight:600; border:0; padding:10px 16px; }
+  #say { min-height:1.4em; color:var(--dim); text-align:center; margin:-8px 0 0; font-size:14px; }
+  .apps { display:grid; grid-template-columns:repeat(3,1fr); gap:8px; }
+  .apps button { font-size:14px; padding:12px 6px; }
+  .pad { position:relative; width:260px; height:260px; margin:0 auto; border-radius:50%; }
+  .pad button { position:absolute; border-radius:50%; width:72px; height:72px; font-size:22px; border:0; background:transparent; }
+  .pad .ok { width:100px; height:100px; left:80px; top:80px; background:rgba(255,255,255,.14); border:1px solid var(--rim); font-size:17px; font-weight:600; }
+  .pad .up { left:94px; top:6px; } .pad .down { left:94px; bottom:6px; }
+  .pad .left { left:6px; top:94px; } .pad .right { right:6px; top:94px; }
+  .row { display:grid; grid-template-columns:repeat(3,1fr); gap:8px; }
+  .row4 { display:grid; grid-template-columns:repeat(4,1fr); gap:8px; }
+  .type { display:flex; gap:8px; padding:6px; }
+  .type button { padding:10px 14px; }
+  h2 { font-size:12px; letter-spacing:.16em; text-transform:uppercase; color:var(--dim); margin:4px 4px -10px; font-weight:600; }
+</style>
+</head>
+<body>
+<main>
+  <form class="ask glass" id="askForm">
+    <input id="q" placeholder="Put on… (e.g. that show about a fake lawyer)" autocomplete="off" enterkeyhint="go">
+    <button type="submit" id="askBtn">Ask</button>
+  </form>
+  <p id="say" aria-live="polite"></p>
+  <button id="then" hidden style="background:#fff;color:#0F1724;font-weight:600;border:0;margin-top:-6px"></button>
+
+  <h2>Apps</h2>
+  <div class="apps" id="apps"></div>
+
+  <div class="pad glass" role="group" aria-label="Direction pad">
+    <button class="up" data-key="up" aria-label="Up">▲</button>
+    <button class="left" data-key="left" aria-label="Left">◀</button>
+    <button class="ok" data-key="ok">OK</button>
+    <button class="right" data-key="right" aria-label="Right">▶</button>
+    <button class="down" data-key="down" aria-label="Down">▼</button>
+  </div>
+
+  <div class="row">
+    <button data-key="back">Back</button>
+    <button data-key="home">Home</button>
+    <button data-key="menu">Menu</button>
+  </div>
+  <div class="row">
+    <button data-key="rewind" aria-label="Rewind">⏪</button>
+    <button data-key="playpause" aria-label="Play or pause">⏯</button>
+    <button data-key="forward" aria-label="Fast forward">⏩</button>
+  </div>
+  <div class="row4">
+    <button data-key="voldown" aria-label="Volume down">Vol −</button>
+    <button data-key="volup" aria-label="Volume up">Vol +</button>
+    <button data-key="sleep">Sleep</button>
+    <button data-key="wake">Wake</button>
+  </div>
+
+  <form class="type glass" id="typeForm">
+    <input id="t" placeholder="Type into the TV's search box" autocomplete="off" enterkeyhint="send">
+    <button type="submit">Send</button>
+  </form>
+</main>
+<script>
+  const say = document.getElementById('say');
+  const post = (path, body) => fetch(path, {method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify(body)})
+    .then(r => r.json()).catch(() => ({error:'Cannot reach the computer'}));
+  const buzz = () => navigator.vibrate && navigator.vibrate(12);
+
+  document.querySelectorAll('[data-key]').forEach(b => b.addEventListener('click', async () => {
+    buzz();
+    const r = await post('/api/key', {key:b.dataset.key});
+    if (r.error) say.textContent = r.error;
+  }));
+
+  fetch('/api/apps').then(r => r.json()).then(apps => {
+    const box = document.getElementById('apps');
+    apps.forEach(a => {
+      const b = document.createElement('button');
+      b.textContent = a.name;
+      b.onclick = () => { buzz(); post('/api/launch', {package:a.package}); say.textContent = 'Opening ' + a.name; };
+      box.appendChild(b);
+    });
+  }).catch(() => say.textContent = 'Cannot reach the computer');
+
+  document.getElementById('askForm').addEventListener('submit', async e => {
+    e.preventDefault();
+    const q = document.getElementById('q').value.trim();
+    if (!q) return;
+    const btn = document.getElementById('askBtn');
+    btn.disabled = true; say.textContent = 'Thinking…';
+    const r = await post('/api/ask', {q});
+    say.textContent = r.say || r.error || '';
+    btn.disabled = false;
+    const then = document.getElementById('then');
+    then.hidden = !r.then;
+    if (r.then) {
+      then.textContent = r.then;
+      then.onclick = async () => {
+        buzz(); then.hidden = true;
+        const s = await post('/api/search', {app:r.app, query:r.query});
+        say.textContent = s.error || 'Searching on the TV…';
+      };
+    }
+  });
+
+  document.getElementById('typeForm').addEventListener('submit', async e => {
+    e.preventDefault();
+    const t = document.getElementById('t');
+    if (!t.value) return;
+    await post('/api/text', {text:t.value});
+    t.value = '';
+  });
+</script>
+</body>
+</html>

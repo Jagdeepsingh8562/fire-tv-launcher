@@ -64,6 +64,7 @@ public class MainActivity extends Activity implements AppAdapter.TileListener {
     private GlassView glass;
     private TextView heroName;
     private boolean heroShown;
+    private Weather weather;
     // Ambient-glass wallpapers: assets/wallpapers, one every WALL_MS in order, crossfading between two views.
     private static final long WALL_MS = 5 * MINUTE_MS;
     private ImageView wallA, wallB;
@@ -110,6 +111,7 @@ public class MainActivity extends Activity implements AppAdapter.TileListener {
         public void run() {
             updateGreeting();
             updateWifiLabel();
+            weather.refreshIfStale();
             handler.postDelayed(this, MINUTE_MS);
         }
     };
@@ -132,6 +134,15 @@ public class MainActivity extends Activity implements AppAdapter.TileListener {
         btnWifi = findViewById(R.id.btnWifi);
         applyFonts();
         loadWalls();
+        View weatherBox = findViewById(R.id.weather);
+        ImageView weatherIcon = findViewById(R.id.weatherIcon);
+        TextView weatherTemp = findViewById(R.id.weatherTemp);
+        weatherTemp.setTypeface(Fonts.regular(this));
+        weather = new Weather(this, getString(R.string.weather_latitude), getString(R.string.weather_longitude), (c, icon) -> {
+            weatherIcon.setImageResource(icon);
+            weatherTemp.setText(c + "\u00B0");
+            weatherBox.setVisibility(View.VISIBLE);
+        });
 
         grid = findViewById(R.id.grid);
         // One span unit per cell of any dock size 1..COLUMNS: the dock row splits evenly, grid rows are COLUMNS wide.
@@ -270,6 +281,7 @@ public class MainActivity extends Activity implements AppAdapter.TileListener {
         if (wallShown == null) showWall(wallIndex);
         handler.postDelayed(nextWall, WALL_MS);
         updateWifiLabel();
+        weather.refreshIfStale();
         handler.postDelayed(minuteTick, MINUTE_MS);
         buds.resume();
         ConnectivityManager cm = (ConnectivityManager) getSystemService(CONNECTIVITY_SERVICE);
@@ -507,13 +519,27 @@ public class MainActivity extends Activity implements AppAdapter.TileListener {
     private void showPowerMenu(View anchor) {
         View panel = getLayoutInflater().inflate(R.layout.popup_inputs, root, false);
         LinearLayout rows = panel.findViewById(R.id.rows);
-        int width = (int) (190 * density);
+        int width = (int) (250 * density);
         final PopupWindow popup = new PopupWindow(panel, width, ViewGroup.LayoutParams.WRAP_CONTENT, true);
         popup.setBackgroundDrawable(new ColorDrawable(Color.TRANSPARENT));
         popup.setOutsideTouchable(true);
         popup.setAnimationStyle(0);
         popup.setElevation(0f);
         addInputRow(rows, popup, R.drawable.ic_sleep, getString(R.string.sleep), -1, this::sleepNow);
+        int left = SleepTimer.minutesLeft(this);
+        if (left > 0) {
+            addInputRow(rows, popup, R.drawable.ic_timer, getString(R.string.sleep_timer_cancel, left), -1, () -> {
+                SleepTimer.cancel(this);
+                Toast.makeText(this, R.string.sleep_timer_off, Toast.LENGTH_SHORT).show();
+            });
+        }
+        for (int m : new int[]{30, 60, 90}) {
+            addInputRow(rows, popup, R.drawable.ic_timer, getString(R.string.sleep_in, m), -1, () -> {
+                if (!adminOn()) return;
+                SleepTimer.start(this, m);
+                Toast.makeText(this, getString(R.string.sleep_timer_set, m), Toast.LENGTH_SHORT).show();
+            });
+        }
         addInputRow(rows, popup, R.drawable.ic_restart, getString(R.string.restart), -1, () ->
                 open(new Intent().setClassName("com.amazon.tv.settings.v2",
                         "com.amazon.tv.settings.v2.tv.device.DeviceActivity")));
@@ -526,14 +552,16 @@ public class MainActivity extends Activity implements AppAdapter.TileListener {
     }
 
     private void sleepNow() {
+        if (adminOn()) SleepTimer.sleepNow(this);
+    }
+
+    /** Device admin is what lets the launcher put the TV to sleep; say how to turn it on when it is off. */
+    private boolean adminOn() {
         android.app.admin.DevicePolicyManager dpm =
                 (android.app.admin.DevicePolicyManager) getSystemService(DEVICE_POLICY_SERVICE);
-        android.content.ComponentName admin = new android.content.ComponentName(this, AdminReceiver.class);
-        if (dpm != null && dpm.isAdminActive(admin)) {
-            dpm.lockNow();
-            return;
-        }
+        if (dpm != null && dpm.isAdminActive(new android.content.ComponentName(this, AdminReceiver.class))) return true;
         Toast.makeText(this, R.string.sleep_needs_admin, Toast.LENGTH_LONG).show();
+        return false;
     }
 
     /** After the dock changes, focus the app's new tile once the grid has re-laid out. */

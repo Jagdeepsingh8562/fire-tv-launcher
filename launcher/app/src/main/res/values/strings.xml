@@ -37,4 +37,8 @@
     <string name="sleep">Sleep</string>
     <string name="restart">Restart…</string>
     <string name="sleep_needs_admin">Sleep needs one-time setup: adb shell dpm set-active-admin com.gathin.tvhome/.AdminReceiver</string>
+    <string name="sleep_in">Sleep in %1$d min</string>
+    <string name="sleep_timer_set">The TV will sleep in %1$d minutes</string>
+    <string name="sleep_timer_cancel">Cancel timer (%1$d min left)</string>
+    <string name="sleep_timer_off">Sleep timer off</string>
 </resources>

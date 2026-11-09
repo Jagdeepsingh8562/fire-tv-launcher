@@ -20,6 +20,7 @@ public class BootReceiver extends BroadcastReceiver {
         if (up > WINDOW_MS) return;
         if (done) return;   // the launcher process lives on after it opens, so this resets only on a new boot
         done = true;
+        SleepTimer.cancel(context);   // a sleep timer from before the restart did not survive it
         context.startActivity(new Intent(context, MainActivity.class).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK));
     }
 }
