@@ -7,7 +7,6 @@ import android.content.Intent;
 import android.graphics.Color;
 import android.graphics.Rect;
 import android.graphics.drawable.ColorDrawable;
-import android.graphics.drawable.GradientDrawable;
 import android.media.tv.TvContract;
 import android.media.tv.TvInputInfo;
 import android.media.tv.TvInputManager;
@@ -66,19 +65,24 @@ public class MainActivity extends Activity implements AppAdapter.TileListener {
     private RecyclerView grid;
     private FrameLayout root;
     private GlassView glass;
-    private View ambient;
     private TextView heroName;
-    private View dockDot;
-    // macOS dock magnification: focused icon and its neighbours grow from their bottom edge and lift.
-    private static final float DOCK_MAGNIFY = 1.30f;
-    private static final float DOCK_NEIGHBOUR = 1.10f;
-    private static final float DOCK_LIFT_DP = 10f;
-    private static final float DOCK_NEIGHBOUR_LIFT_DP = 4f;
-    private GradientDrawable ambientGlow;
-    private int ambientColor;
     private boolean heroShown;
+    // Ambient-glass wallpapers: assets/wallpapers, one every WALL_MS in order, crossfading between two views.
+    private static final long WALL_MS = 5 * MINUTE_MS;
+    private ImageView wallA, wallB;
+    private TextView caption;
+    private String[] walls = new String[0];
+    private final java.util.Map<String, String> captions = new java.util.HashMap<>();
+    private int wallIndex = -1;
+    private android.graphics.Bitmap wallShown;
+    private final Runnable nextWall = new Runnable() {
+        @Override
+        public void run() {
+            showWall(wallIndex + 1);
+            handler.postDelayed(this, WALL_MS);
+        }
+    };
     private TextView greeting;
-    private MountainView scene;
     private View gridShade;
     private boolean shadeOn;
     private TextView btnWifi;
@@ -108,7 +112,6 @@ public class MainActivity extends Activity implements AppAdapter.TileListener {
         @Override
         public void run() {
             updateGreeting();
-            updateBackground();
             updateWifiLabel();
             handler.postDelayed(this, MINUTE_MS);
         }
@@ -124,20 +127,15 @@ public class MainActivity extends Activity implements AppAdapter.TileListener {
 
         root = findViewById(R.id.root);
         glass = findViewById(R.id.glass);
-        ambient = findViewById(R.id.ambient);
         heroName = findViewById(R.id.heroName);
-        dockDot = findViewById(R.id.dockDot);
-        ambientGlow = new GradientDrawable();
-        ambientGlow.setGradientType(GradientDrawable.RADIAL_GRADIENT);
-        ambientGlow.setGradientCenter(0.32f, 0.42f);
-        ambient.setBackground(ambientGlow);
-        ambient.addOnLayoutChangeListener((v, l, t, r, b, ol, ot, or, ob) ->
-                ambientGlow.setGradientRadius((r - l) * 0.62f));
         greeting = findViewById(R.id.greeting);
-        scene = findViewById(R.id.scene);
+        wallA = findViewById(R.id.wallA);
+        wallB = findViewById(R.id.wallB);
+        caption = findViewById(R.id.caption);
         gridShade = findViewById(R.id.gridShade);
         btnWifi = findViewById(R.id.btnWifi);
         applyFonts();
+        loadWalls();
 
         grid = findViewById(R.id.grid);
         // One span unit per cell of any dock size 1..COLUMNS: the dock row splits evenly, grid rows are COLUMNS wide.
@@ -162,10 +160,18 @@ public class MainActivity extends Activity implements AppAdapter.TileListener {
         // tvOS layout: push the dock row to the bottom of the screen; the grid hides below until you press Down.
         grid.addOnLayoutChangeListener((v, l, t, r, b, ol, ot, or, ob) -> {
             int h = b - t;
-            int dockRow = (int) ((101 + 6 + 12) * density);   // item height plus DockDecoration offsets
+            int dockRow = (int) ((123 + 6 + 12) * density);   // item height plus DockDecoration offsets
             int want = Math.max(0, h - dockRow + (int) (8 * density));
             if (grid.getPaddingTop() != want) {
                 grid.setPadding(grid.getPaddingLeft(), want, grid.getPaddingRight(), grid.getPaddingBottom());
+                // The dock just moved: put the glass and the title back on the focused tile after this layout.
+                grid.post(() -> {
+                    View f = getCurrentFocus();
+                    RecyclerView.ViewHolder vh = f != null && f.getId() == R.id.card ? grid.findContainingViewHolder(f) : null;
+                    if (vh != null && vh.getBindingAdapterPosition() != RecyclerView.NO_POSITION) {
+                        onTileFocused(vh.getBindingAdapterPosition(), f);
+                    }
+                });
             }
         });
 
@@ -173,7 +179,6 @@ public class MainActivity extends Activity implements AppAdapter.TileListener {
         grid.addOnScrollListener(new RecyclerView.OnScrollListener() {
             @Override
             public void onScrolled(@NonNull RecyclerView rv, int dx, int dy) {
-                scene.setScroll(rv.computeVerticalScrollOffset());
                 if (!glassShown) return;
                 glassTargetY -= dy;
                 if (springY.isRunning()) springY.animateToFinalPosition(glassTargetY);
@@ -185,7 +190,7 @@ public class MainActivity extends Activity implements AppAdapter.TileListener {
         springX = new SpringAnimation(glass, DynamicAnimation.TRANSLATION_X);
         springY = new SpringAnimation(glass, DynamicAnimation.TRANSLATION_Y);
         for (SpringAnimation s : new SpringAnimation[]{springX, springY}) {
-            s.setSpring(new SpringForce().setStiffness(260f).setDampingRatio(0.58f));
+            s.setSpring(new SpringForce().setStiffness(260f).setDampingRatio(0.9f));
         }
 
         View btnInputs = findViewById(R.id.btnInputs);
@@ -253,12 +258,11 @@ public class MainActivity extends Activity implements AppAdapter.TileListener {
         glass.setAlpha(0f);
         heroShown = false;
         heroName.setAlpha(0f);
-        dockDot.setAlpha(0f);
-        ambient.setAlpha(0f);
         adapter.reload();
         grid.scheduleLayoutAnimation();
         updateGreeting();
-        updateBackground();
+        if (wallShown == null) showWall(wallIndex);
+        handler.postDelayed(nextWall, WALL_MS);
         updateWifiLabel();
         handler.postDelayed(minuteTick, MINUTE_MS);
         buds.resume();
@@ -268,7 +272,11 @@ public class MainActivity extends Activity implements AppAdapter.TileListener {
         // Return to the tile we left from, or the first one.
         grid.post(() -> {
             View focused = getCurrentFocus();
-            if (focused != null && grid.findContainingViewHolder(focused) != null) return;
+            RecyclerView.ViewHolder vh = focused != null ? grid.findContainingViewHolder(focused) : null;
+            if (vh != null && focused.getId() == R.id.card && vh.getBindingAdapterPosition() != RecyclerView.NO_POSITION) {
+                onTileFocused(vh.getBindingAdapterPosition(), focused);   // still focused: re-place glass and title
+                return;
+            }
             focusTile(lastFocused);
         });
     }
@@ -278,6 +286,7 @@ public class MainActivity extends Activity implements AppAdapter.TileListener {
         buds.pause();
         super.onPause();
         handler.removeCallbacks(minuteTick);
+        handler.removeCallbacks(nextWall);
         ConnectivityManager cm = (ConnectivityManager) getSystemService(CONNECTIVITY_SERVICE);
         if (cm != null) cm.unregisterNetworkCallback(networkCallback);
     }
@@ -292,12 +301,8 @@ public class MainActivity extends Activity implements AppAdapter.TileListener {
     @Override
     public void onTileFocused(int position, View card) {
         lastFocused = position;
-        if (adapter.isDocked(position)) {
-            onDockFocused(position, card);
-            return;
-        }
-        magnifyDock(-1);
-        followFocus(card, true);
+        boolean docked = adapter.isDocked(position);
+        setShade(!docked);
         // Tile rect in root coordinates, using layout positions (ignores the scale animation).
         Rect r = new Rect(0, 0, card.getWidth(), card.getHeight());
         root.offsetDescendantRectToMyCoords(card, r);
@@ -328,90 +333,47 @@ public class MainActivity extends Activity implements AppAdapter.TileListener {
             springY.animateToFinalPosition(y);
         }
         View item = (View) card.getParent();
+        if (docked) {
+            // Dock row back to its resting place at the bottom; the glass follows via the scroll listener.
+            int dy = item.getTop() - (int) (6 * density) - grid.getPaddingTop();
+            if (Math.abs(dy) > 1) grid.smoothScrollBy(0, dy);
+            r.offset(0, -dy);
+            showHero(position, r);
+            return;
+        }
         hideHero();
         // Scroll just enough so the whole glass (not only the tile) is visible.
         Rect want = new Rect(0, -(int) pad * 2, item.getWidth(), item.getHeight() + (int) pad);
         grid.requestChildRectangleOnScreen(item, want, false);
     }
 
-    // ---- top shelf -------------------------------------------------------------------------------
+    // ---- hero title ------------------------------------------------------------------------------
 
-    private void onDockFocused(int position, View card) {
-        hideGlass();
-        View item = (View) card.getParent();
-        int decoratedTop = item.getTop() - (int) (6 * density);
-        int dy = decoratedTop - grid.getPaddingTop();
-        if (Math.abs(dy) > 1) grid.smoothScrollBy(0, dy);
-        magnifyDock(position);
-        followFocus(card, false);
-        Rect r = new Rect(0, 0, card.getWidth(), card.getHeight());
-        root.offsetDescendantRectToMyCoords(card, r);
-        r.offset(0, -dy);
-        showHero(position, r);
-    }
-
-    /** Scale dock icons by distance from the focused one; focused < 0 resets them all. */
-    private void magnifyDock(int focused) {
-        RecyclerView.LayoutManager lm = grid.getLayoutManager();
-        if (lm == null) return;
-        for (int i = 0; i < adapter.dockCount(); i++) {
-            View item = lm.findViewByPosition(i);
-            View card = item != null ? item.findViewById(R.id.card) : null;
-            if (card == null) continue;
-            int d = focused < 0 ? Integer.MAX_VALUE : Math.abs(i - focused);
-            float s = d == 0 ? DOCK_MAGNIFY : d == 1 ? DOCK_NEIGHBOUR : 1f;
-            float lift = d == 0 ? DOCK_LIFT_DP : d == 1 ? DOCK_NEIGHBOUR_LIFT_DP : 0f;
-            card.setPivotX(card.getWidth() / 2f);
-            card.setPivotY(card.getHeight());
-            card.animate().scaleX(s).scaleY(s).translationY(-lift * density)
-                    .setDuration(220).setInterpolator(new DecelerateInterpolator()).start();
-            // The shadow grows from the same point (the icon's bottom centre) so it stays under the icon.
-            View shadow = item.findViewById(R.id.shadow);
-            shadow.setPivotX(shadow.getWidth() / 2f);
-            shadow.setPivotY(card.getBottom() - shadow.getTop());
-            shadow.animate().scaleX(s).scaleY(s).translationY(-lift * density)
-                    .setDuration(220).setInterpolator(new DecelerateInterpolator()).start();
-        }
-    }
-
-    // Name tooltip above the magnified icon, dot below it, and a soft glow in the app's colour.
+    /** The focused dock app's name in large light type, above the left end of the glass band. */
     private void showHero(int position, Rect card) {
         heroName.setText(adapter.labelAt(position));
         heroName.measure(View.MeasureSpec.UNSPECIFIED, View.MeasureSpec.UNSPECIFIED);
-        float iconTop = card.bottom - card.height() * DOCK_MAGNIFY - DOCK_LIFT_DP * density;
-        heroName.setX(card.exactCenterX() - heroName.getMeasuredWidth() / 2f);
-        heroName.setY(iconTop - 8 * density - heroName.getMeasuredHeight());
-        dockDot.setX(card.exactCenterX() - dockDot.getWidth() / 2f);
-        dockDot.setY(card.bottom + 3 * density);
-        heroName.animate().alpha(1f).setDuration(160).start();
-        dockDot.animate().alpha(1f).setDuration(160).start();
-        int color = adapter.ambientColorAt(position);
+        float bandLeft = grid.getPaddingLeft() - 16 * density;
+        Rect g = new Rect(0, 0, grid.getWidth(), grid.getHeight());
+        root.offsetDescendantRectToMyCoords(grid, g);
+        // Where the dock rests (grid padding + decoration 6dp + item padding 8dp), minus the band's 16dp margin;
+        // not the card's current rect, which is still moving on the first layout or while scrolling back.
+        float bandTop = g.top + grid.getPaddingTop() + (6 + 8 - 16) * density;
+        android.util.Log.d("HERODBG", "g=" + g + " padTop=" + grid.getPaddingTop() + " card=" + card + " gridH=" + grid.getHeight() + " heroH=" + heroName.getMeasuredHeight());
+        heroName.setX(g.left + bandLeft + 8 * density);
+        heroName.setY(bandTop - 6 * density - heroName.getMeasuredHeight());
         if (!heroShown) {
-            setAmbient(color);
-            ambient.animate().alpha(1f).setDuration(600).start();
+            heroName.setTranslationY(8 * density);
+            heroName.animate().alpha(1f).translationY(0f).setDuration(260)
+                    .setInterpolator(new DecelerateInterpolator(1.6f)).start();
             heroShown = true;
-        } else if (color != ambientColor) {
-            ambient.animate().alpha(0.35f).setDuration(200).withEndAction(() -> {
-                setAmbient(color);
-                ambient.animate().alpha(1f).setDuration(500).start();
-            }).start();
         }
-    }
-
-    private void setAmbient(int color) {
-        ambientColor = color;
-        int c = color & 0x00FFFFFF;
-        // Kept faint so the photo keeps its own colours (was 36% / 15%).
-        ambientGlow.setColors(new int[]{0x26000000 | c, 0x0D000000 | c, 0x00000000 | c});
     }
 
     private void hideHero() {
         if (!heroShown) return;
         heroShown = false;
         heroName.animate().alpha(0f).setDuration(160).start();
-        dockDot.animate().alpha(0f).setDuration(160).start();
-        ambient.animate().alpha(0f).setDuration(300).start();
-        magnifyDock(-1);
     }
 
     private void hideGlass() {
@@ -502,7 +464,7 @@ public class MainActivity extends Activity implements AppAdapter.TileListener {
         Rect r = new Rect(0, 0, card.getWidth(), card.getHeight());
         root.offsetDescendantRectToMyCoords(card, r);
         panel.measure(View.MeasureSpec.makeMeasureSpec(width, View.MeasureSpec.EXACTLY), View.MeasureSpec.UNSPECIFIED);
-        float top = docked ? r.bottom - r.height() * DOCK_MAGNIFY - DOCK_LIFT_DP * density : r.top;
+        float top = r.top;
         int x = (int) (r.exactCenterX() - width / 2f);
         int y = (int) (top - 12 * density - panel.getMeasuredHeight());
         heroName.animate().alpha(0f).setDuration(120).start();
@@ -620,7 +582,7 @@ public class MainActivity extends Activity implements AppAdapter.TileListener {
 
     // ---- top bar ---------------------------------------------------------------------------------
 
-    // Morning 5-12, afternoon 12-17, evening 17-22, night 22-5. Indexes GREETINGS and MountainView palettes.
+    // Morning 5-12, afternoon 12-17, evening 17-22, night 22-5. Indexes GREETINGS.
     private static final int[] GREETINGS = {
             R.string.good_morning, R.string.good_afternoon, R.string.good_evening, R.string.good_night};
 
@@ -639,10 +601,55 @@ public class MainActivity extends Activity implements AppAdapter.TileListener {
         greeting.setText(name.isEmpty() ? text : text + ", " + name);
     }
 
-    private void updateBackground() {
-        // Test hook: adb shell am start -n com.gathin.tvhome/.MainActivity --ei dayPart 0..3
-        int forced = getIntent().getIntExtra("dayPart", -1);
-        scene.setDayPart(forced >= 0 && forced <= 3 ? forced : dayPart());
+    private void loadWalls() {
+        try {
+            List<String> names = new ArrayList<>();
+            for (String f : getAssets().list("wallpapers")) if (f.endsWith(".jpg")) names.add(f);
+            Collections.sort(names);
+            walls = names.toArray(new String[0]);
+            java.io.BufferedReader in = new java.io.BufferedReader(new java.io.InputStreamReader(
+                    getAssets().open("wallpapers/captions.txt"), "UTF-8"));
+            for (String line; (line = in.readLine()) != null; ) {
+                int tab = line.indexOf('\t');
+                if (tab > 0) captions.put(line.substring(0, tab).trim(), line.substring(tab + 1).trim());
+            }
+            in.close();
+        } catch (java.io.IOException ignored) {
+            // no wallpapers or captions: the plain background colour shows
+        }
+        wallIndex = getSharedPreferences("tvhome", MODE_PRIVATE).getInt("wall", 0);
+    }
+
+    /** Crossfades to wallpaper i (wrapping). RGB_565 halves the memory of each 1080p picture. */
+    private void showWall(int i) {
+        if (walls.length == 0) return;
+        wallIndex = ((i % walls.length) + walls.length) % walls.length;
+        getSharedPreferences("tvhome", MODE_PRIVATE).edit().putInt("wall", wallIndex).apply();
+        String name = walls[wallIndex];
+        android.graphics.BitmapFactory.Options o = new android.graphics.BitmapFactory.Options();
+        o.inPreferredConfig = android.graphics.Bitmap.Config.RGB_565;
+        android.graphics.Bitmap bmp;
+        try (java.io.InputStream in = getAssets().open("wallpapers/" + name)) {
+            bmp = android.graphics.BitmapFactory.decodeStream(in, null, o);
+        } catch (java.io.IOException e) {
+            return;
+        }
+        String text = captions.get(name);
+        caption.animate().alpha(0f).setDuration(300).withEndAction(() -> {
+            caption.setText(text == null ? "" : text);
+            caption.animate().alpha(1f).setDuration(500).start();
+        }).start();
+        // wallA (below) holds the old picture while the new one fades in on wallB (above); then the old is freed.
+        final android.graphics.Bitmap old = wallShown;
+        wallShown = bmp;
+        wallB.animate().cancel();
+        wallA.setImageBitmap(old);
+        wallB.setImageBitmap(bmp);
+        wallB.setAlpha(0f);
+        wallB.animate().alpha(1f).setDuration(old == null ? 400 : 1400).withEndAction(() -> {
+            wallA.setImageDrawable(null);
+            if (old != null && !old.isRecycled()) old.recycle();
+        }).start();
     }
 
     private void applyFonts() {
@@ -650,16 +657,9 @@ public class MainActivity extends Activity implements AppAdapter.TileListener {
         ((TextView) findViewById(R.id.clock)).setTypeface(Fonts.light(this));
         ((TextView) findViewById(R.id.ampm)).setTypeface(Fonts.medium(this));
         ((TextView) findViewById(R.id.date)).setTypeface(Fonts.regular(this));
-        heroName.setTypeface(Fonts.medium(this));
+        heroName.setTypeface(Fonts.light(this));
+        caption.setTypeface(Fonts.regular(this));
         btnWifi.setTypeface(Fonts.medium(this));
-    }
-
-    /** Parallax from the focused card's horizontal position, and the grid shade on or off. */
-    private void followFocus(View card, boolean inGrid) {
-        Rect r = new Rect(0, 0, card.getWidth(), card.getHeight());
-        root.offsetDescendantRectToMyCoords(card, r);
-        if (root.getWidth() > 0) scene.setParallax(r.exactCenterX() / root.getWidth() * 2f - 1f);
-        setShade(inGrid);
     }
 
     private void setShade(boolean on) {

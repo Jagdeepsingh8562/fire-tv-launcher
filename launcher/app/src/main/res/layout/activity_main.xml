@@ -3,13 +3,21 @@
     android:id="@+id/root"
     android:layout_width="match_parent"
     android:layout_height="match_parent"
-    android:background="#FF000000">
+    android:background="#FF05070C">
 
-    <!-- Mountain scene drawn in code; palette follows the time of day. -->
-    <com.gathin.tvhome.MountainView
-        android:id="@+id/scene"
+    <!-- Ambient-glass wallpapers: wallB fades in over wallA, rotated in code. -->
+    <ImageView
+        android:id="@+id/wallA"
         android:layout_width="match_parent"
         android:layout_height="match_parent"
+        android:scaleType="centerCrop"
+        android:importantForAccessibility="no" />
+
+    <ImageView
+        android:id="@+id/wallB"
+        android:layout_width="match_parent"
+        android:layout_height="match_parent"
+        android:scaleType="centerCrop"
         android:importantForAccessibility="no" />
 
     <View
@@ -25,28 +33,18 @@
         android:alpha="0"
         android:background="#8C060A12" />
 
-    <!-- Ambient glow in the colour of the focused dock app. -->
-    <View
-        android:id="@+id/ambient"
-        android:layout_width="match_parent"
-        android:layout_height="match_parent"
-        android:alpha="0" />
-
-    <!-- Name tooltip above the focused dock icon, positioned in code. -->
+    <!-- The focused dock app's name in large light type above the glass band, positioned in code. -->
     <TextView
         android:id="@+id/heroName"
         android:layout_width="wrap_content"
         android:layout_height="wrap_content"
         android:alpha="0"
-        android:background="@drawable/dock_label_bg"
-        android:paddingStart="14dp"
-        android:paddingEnd="14dp"
-        android:paddingTop="5dp"
-        android:paddingBottom="6dp"
-        android:textColor="@color/snow"
-        android:textSize="14sp"
-        android:fontFamily="@font/open_sans"
-        android:fontVariationSettings="'wght' 500"
+        android:textColor="#FFFFFFFF"
+        android:textSize="42sp"
+        android:letterSpacing="-0.01"
+        android:shadowColor="#80000000"
+        android:shadowRadius="14"
+        android:shadowDy="2"
         android:singleLine="true" />
 
     <LinearLayout
@@ -73,8 +71,10 @@
                     android:layout_width="wrap_content"
                     android:layout_height="wrap_content"
                     android:layout_marginStart="4dp"
-                    android:textColor="@color/amber"
+                    android:textColor="#E6FFFFFF"
                     android:textSize="13sp"
+                    android:shadowColor="#99000000"
+                    android:shadowRadius="8"
                     android:fontFamily="@font/open_sans"
                     android:fontVariationSettings="'wght' 500"
                     android:letterSpacing="0.22"
@@ -92,8 +92,10 @@
                         android:layout_height="wrap_content"
                         android:format12Hour="h:mm"
                         android:format24Hour="HH:mm"
-                        android:textColor="@color/snow"
+                        android:textColor="#FFFFFFFF"
                         android:textSize="60sp"
+                        android:shadowColor="#80000000"
+                        android:shadowRadius="12"
                         android:fontFamily="@font/open_sans"
                         android:fontVariationSettings="'wght' 300"
                         android:letterSpacing="-0.04"
@@ -108,7 +110,9 @@
                         android:layout_marginBottom="8dp"
                         android:format12Hour="a"
                         android:format24Hour=""
-                        android:textColor="@color/snow_dim"
+                        android:textColor="#D9FFFFFF"
+                        android:shadowColor="#99000000"
+                        android:shadowRadius="8"
                         android:textSize="16sp"
                         android:fontFamily="@font/open_sans"
                         android:fontVariationSettings="'wght' 500"
@@ -132,7 +136,9 @@
                         android:layout_marginBottom="9dp"
                         android:format12Hour="EEEE  d MMMM"
                         android:format24Hour="EEEE  d MMMM"
-                        android:textColor="@color/snow_dim"
+                        android:textColor="#D9FFFFFF"
+                        android:shadowColor="#99000000"
+                        android:shadowRadius="8"
                         android:textSize="15sp"
                         android:fontFamily="@font/open_sans"
                         android:fontVariationSettings="'wght' 400"
@@ -178,6 +184,20 @@
                     android:drawableStart="@drawable/ic_settings"
                     android:nextFocusDown="@+id/grid" />
             </LinearLayout>
+
+            <!-- Wallpaper name, right-aligned under the buttons. -->
+            <TextView
+                android:id="@+id/caption"
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:layout_below="@id/topButtons"
+                android:layout_alignParentEnd="true"
+                android:layout_marginTop="10dp"
+                android:textColor="#D9FFFFFF"
+                android:textSize="14sp"
+                android:shadowColor="#B3000000"
+                android:shadowRadius="8"
+                android:singleLine="true" />
         </RelativeLayout>
 
         <!-- The wrapper clips at the grid's edge; the grid itself must not clip so scaled tiles can overflow their cells. -->
@@ -191,8 +211,8 @@
                 android:id="@+id/grid"
                 android:layout_width="match_parent"
                 android:layout_height="match_parent"
-                android:paddingStart="264dp"
-                android:paddingEnd="264dp"
+                android:paddingStart="50dp"
+                android:paddingEnd="50dp"
                 android:paddingTop="10dp"
                 android:paddingBottom="40dp"
                 android:clipToPadding="false"
@@ -208,19 +228,11 @@
         android:id="@+id/btnPower"
         style="@style/TopIconButton"
         android:layout_gravity="bottom|end"
-        android:layout_marginEnd="56dp"
-        android:layout_marginBottom="34dp"
+        android:layout_marginEnd="40dp"
+        android:layout_marginBottom="57dp"
         android:contentDescription="@string/power"
         android:drawableStart="@drawable/ic_power"
         android:nextFocusUp="@+id/btnSettings" />
-
-    <!-- Dot under the focused dock icon, positioned in code. -->
-    <View
-        android:id="@+id/dockDot"
-        android:layout_width="12dp"
-        android:layout_height="7dp"
-        android:alpha="0"
-        android:background="@drawable/dock_dot" />
 
     <!-- The single floating glass highlight that springs between tiles. -->
     <com.gathin.tvhome.GlassView

@@ -1,10 +1,10 @@
 <?xml version="1.0" encoding="utf-8"?>
-<!-- Only the top is shaded, for the clock; the mountains below keep their colour. -->
+<!-- Ambient-glass keeps the photo undimmed; only a light shade at the very top for the clock. -->
 <shape xmlns:android="http://schemas.android.com/apk/res/android" android:shape="rectangle">
     <gradient
         android:angle="270"
-        android:startColor="#73000000"
+        android:startColor="#59000000"
         android:centerColor="#00000000"
-        android:centerY="0.35"
+        android:centerY="0.28"
         android:endColor="#00000000" />
 </shape>

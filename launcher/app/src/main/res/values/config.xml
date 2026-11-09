@@ -12,6 +12,7 @@
         <item>com.netflix.ninja</item>
         <item>in.startv.hotstar</item>
         <item>com.amazon.firebat</item>
+        <item>com.apple.atve.amazon.appletv</item>
     </string-array>
 
     <!-- Apps never shown as tiles (e.g. the Live TV app, which the Inputs menu already covers). -->
@@ -28,7 +29,7 @@
     <string name="live_tv_package" translatable="false">com.amazon.tv.livetv</string>
 
     <!-- Tiles per row in the grid, and the most apps the dock can hold. -->
-    <integer name="columns">4</integer>
+    <integer name="columns">5</integer>
     <!-- Bluetooth button in the top bar: connects/disconnects the paired device whose name contains this. -->
     <string name="bt_device_name" translatable="false">CMF Buds</string>
 </resources>
