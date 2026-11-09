@@ -72,14 +72,23 @@ APPS = [
     # taps "Search" on the phone, and then keys open Search and type (key_search: keycodes, and a float is a
     # pause in seconds for a screen to load; checked on this
     # stick; Left Up OK opens Search from the side menu, JioHotstar needs one more Up into its search box).
-    {"name": "Netflix", "package": "com.netflix.ninja", "search": None, "key_search": [21, 19, 23, 3.0]},
-    {"name": "JioHotstar", "package": "in.startv.hotstar", "search": None, "key_search": [21, 19, 23, 3.0, 19]},
+    # boot: seconds after a restart before the app can be ready (Netflix is at 100-200% CPU for ~40 s here).
+    {"name": "Netflix", "package": "com.netflix.ninja", "search": None, "key_search": [21, 19, 23, 3.0], "boot": 45},
+    {"name": "JioHotstar", "package": "in.startv.hotstar", "search": None, "key_search": [21, 19, 23, 3.0, 19], "boot": 15},
     {"name": "Prime Video", "package": "com.amazon.firebat", "search": None},
     {"name": "Apple TV", "package": "com.apple.atve.amazon.appletv", "search": None},
     {"name": "JioCinema", "package": "com.jio.media.stb.ondemand", "search": None},
     {"name": "FireMusic", "package": "com.azone.firemusic", "search": None},
 ]
 BY_PACKAGE = {a["package"]: a for a in APPS}
+
+
+STATUS = {"text": "", "busy": False}   # what the phone shows while a key search is under way
+LAUNCHED = {}                          # package -> when we last restarted it
+
+
+def log(msg):
+    print(time.strftime("%H:%M:%S"), msg, flush=True)
 
 
 class Shell:
@@ -115,6 +124,49 @@ def adb(*args, timeout=20):
     return r.stdout
 
 
+def adb_quick(*args, timeout=8):
+    """A one-off adb shell command without reconnecting first; for polling."""
+    r = subprocess.run([ADB, "-s", SERIAL, "shell", *args], capture_output=True, text=True, timeout=timeout)
+    return r.stdout
+
+
+def find_pid(ps_text, package):
+    m = re.search(r"^\S+\s+(\d+)\s.*\s" + re.escape(package) + r"\s*$", ps_text, re.M)
+    return m.group(1) if m else None
+
+
+def cpu_sample(text):
+    """(uptime seconds, process CPU ticks) from `cat /proc/uptime /proc/<pid>/stat`; ticks are 1/100 s."""
+    up, stat = text.splitlines()[:2]
+    rest = stat.rsplit(")", 1)[1].split()   # field n of proc(5) is rest[n-3]; utime 14, stime 15
+    return float(up.split()[0]), int(rest[11]) + int(rest[12])
+
+
+def wait_calm(package, boot=0, timeout=90):
+    """Wait until the app has finished loading: `boot` seconds since we restarted it, then three one-second
+    samples in a row under 60% of a core. Measured here: Netflix runs at 100-200% for ~40 s after launch, then
+    30-50%, then near 0. Proceeds anyway after the timeout."""
+    end = time.time() + timeout
+    pid = prev = None
+    calm = 0
+    while time.time() < end:
+        time.sleep(1)
+        try:
+            if pid is None:
+                pid = find_pid(adb_quick("ps"), package)
+                continue
+            now = cpu_sample(adb_quick("cat", "/proc/uptime", f"/proc/{pid}/stat"))
+        except (ValueError, IndexError, subprocess.TimeoutExpired):
+            pid = prev = None
+            calm = 0
+            continue
+        if prev and now[0] > prev[0]:
+            calm = calm + 1 if (now[1] - prev[1]) / (now[0] - prev[0]) < 60 else 0
+        prev = now
+        if calm >= 3 and time.time() - LAUNCHED.get(package, 0) >= boot:
+            return
+
+
 def shell_quote(s):
     return "'" + s.replace("'", "'\\''") + "'"
 
@@ -137,19 +189,35 @@ def launch(package):
 
 def restart(package):
     adb("am", "force-stop", package)
+    LAUNCHED[package] = time.time()
     launch(package)
 
 
 def key_search(app, query):
-    """From the app's home (a profile already picked), open Search and type the words."""
-    for step in app["key_search"]:
-        if isinstance(step, float):
-            time.sleep(step)
-            continue
-        SHELL.send(f"input keyevent {step}")
-        time.sleep(1.2)
-    time.sleep(1.5)
-    input_text(query)
+    """From the app's home (a profile already picked), open Search and type the words. Waits for the app to
+    finish loading first, so a tap while it is still starting does not lose the keys."""
+    STATUS.update(text=f"Waiting for {app['name']} to finish loading…", busy=True)
+    try:
+        log(f"key_search {app['name']}: waiting for it to load")
+        wait_calm(app["package"], app.get("boot", 0))
+        STATUS["text"] = f"Opening {app['name']} search…"
+        log("loaded, sending keys")
+        time.sleep(2)
+        for step in app["key_search"]:
+            if isinstance(step, float):
+                time.sleep(step)
+                continue
+            SHELL.send(f"input keyevent {step}")
+            time.sleep(1.2)
+        time.sleep(1.5)
+        input_text(query)
+        STATUS["text"] = f"Typed “{query}” into {app['name']}"
+        log("typed")
+    except Exception as e:
+        STATUS["text"] = f"Could not search: {e}"
+        log(f"key_search failed: {e}")
+    finally:
+        STATUS["busy"] = False
 
 
 def youtube_first_video(query):
@@ -294,7 +362,8 @@ def act(plan, allowed):
     if query and not searched:
         say += f" (search for “{query}” on the TV)"
     elif BY_PACKAGE[pkg].get("key_search") and query:
-        return {"say": say + ". Pick your profile on the TV, then tap Search.", "app": pkg, "query": query,
+        return {"say": say + ". It takes about 45 s to start. Pick your profile on the TV, then tap Search.",
+                "app": pkg, "query": query,
                 "then": "Search for " + query}
     return {"say": say, "app": pkg, "query": query}
 
@@ -316,6 +385,8 @@ class Handler(BaseHTTPRequestHandler):
             self.send_header("Content-Length", str(len(page)))
             self.end_headers()
             self.wfile.write(page)
+        elif self.path == "/api/status":
+            self._json(200, STATUS)
         elif self.path == "/api/apps":
             self._json(200, [{"name": a["name"], "package": a["package"]} for a in installed()])
         else:
@@ -366,6 +437,9 @@ if __name__ == "__main__":
         assert BY_PACKAGE["com.netflix.ninja"].get("key_search")
         assert first_video_id('x"videoRenderer":{"videoId":"s3a4OQR-10M","thumbnail"') == "s3a4OQR-10M"
         assert first_video_id("no results here") is None
+        assert find_pid("u0_a4     13657 197   1550616 200664 ffffffff 00000000 S com.netflix.ninja\r\n", "com.netflix.ninja") == "13657"
+        assert find_pid("u0_a4 1 2 3 4 5 6 S com.netflix.ninjaX\n", "com.netflix.ninja") is None
+        assert cpu_sample("2496.61 7846.07\n13657 (m.netflix.ninja) S 197 197 0 0 -1 1077936448 38211 9501 460 80 200 49 21 14 10 -10\n") == (2496.61, 249)
         assert parse_env("# c\nA=1\n B = 'x y' \nbad\nC=\n") == {"A": "1", "B": "x y", "C": ""}
         assert gemini_text({"candidates": [{"content": {"parts": [{"text": "{"}, {"text": "}"}]}}]}) == "{}"
         assert gemini_text({"promptFeedback": {"blockReason": "SAFETY"}}) == ""

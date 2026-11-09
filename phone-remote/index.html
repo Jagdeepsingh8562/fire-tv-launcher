@@ -116,7 +116,13 @@
       then.onclick = async () => {
         buzz(); then.hidden = true;
         const s = await post('/api/search', {app:r.app, query:r.query});
-        say.textContent = s.error || 'Searching on the TV…';
+        if (s.error) { say.textContent = s.error; return; }
+        const poll = setInterval(async () => {   // the server waits for the app to load, then types
+          const st = await fetch('/api/status').then(x => x.json()).catch(() => null);
+          if (!st) return;
+          say.textContent = st.text;
+          if (!st.busy) clearInterval(poll);
+        }, 1500);
       };
     }
   });

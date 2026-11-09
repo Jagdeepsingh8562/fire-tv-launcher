@@ -27,7 +27,8 @@ Open `http://<this computer's address>:5400` on a phone on the same Wi-Fi and ad
   logged. Whoever answers, the reply is checked: it can only choose an app from `APPS` in `server.py` and a plain search phrase.
   YouTube (SmartTube): "play X" finds YouTube's top result for X and plays it; anything vaguer opens the
   search results. Netflix and JioHotstar restart (they drop links at
-  "Who's watching?"): pick your profile on the TV, tap **Search** on the phone, and it opens their Search and
+  "Who's watching?"): pick your profile on the TV, tap **Search** on the phone, and it waits until the app has finished loading (it watches the app's CPU,
+  since Netflix shows nothing on the stick while it starts; about 45 s cold) before it opens their Search and
   types the title. The other apps open on their home page and the
   phone says what to search for. Add an app or a search link in `APPS`.
 - **No password:** anyone on your Wi-Fi can use it, like the TV remote on the table. Never forward a port
