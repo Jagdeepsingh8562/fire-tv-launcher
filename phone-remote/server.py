@@ -216,7 +216,10 @@ class Handler(BaseHTTPRequestHandler):
                 code = KEYS.get(body.get("key"))
                 if code is None:
                     return self._json(400, {"error": "unknown key"})
-                SHELL.send(f"input keyevent {code}")
+                if body.get("key") == "home":   # our launcher, not Amazon's home screen
+                    SHELL.send("am start -n com.gathin.tvhome/.MainActivity")
+                else:
+                    SHELL.send(f"input keyevent {code}")
                 return self._json(200, {"ok": True})
             if self.path == "/api/text":
                 input_text(str(body.get("text", "")))
