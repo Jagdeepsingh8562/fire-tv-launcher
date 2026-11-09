@@ -21,8 +21,8 @@ Open `http://<this computer's address>:5400` on a phone on the same Wi-Fi and ad
   it, Claude does; with neither, only Ask is off.
 - **The computer must stay on and awake** while you use it.
 - **Ask:** the model gets web search only (Google Search grounding for Gemini; WebSearch for Claude) to check
-  which app streams a title in India, no files or shell. `GEMINI_MODEL` defaults to `gemini-flash-latest`
-  (the free tier is Flash-only). If the free plan or its search quota refuses grounded requests, it asks once
+  which app streams a title in India, no files or shell. It tries `gemini-flash-lite-latest`, then
+  `gemini-flash-latest` if that one is busy or out of quota (the free tier is Flash-only); `GEMINI_MODEL` pins one. If the free plan or its search quota refuses grounded requests, it asks once
   more without search; if the daily limit is gone, the phone says so. The key is sent in a header and never
   logged. Whoever answers, the reply is checked: it can only choose an app from `APPS` in `server.py` and a plain search phrase.
   YouTube (SmartTube): "play X" finds YouTube's top result for X and plays it; anything vaguer opens the

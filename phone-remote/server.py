@@ -225,34 +225,42 @@ def gemini_text(data):
 
 
 def ask_gemini(prompt):
-    """One generateContent call with Google Search grounding. If the plan or its search quota refuses that,
-    ask once more without search (the model then answers from what it knows)."""
+    """One generateContent call with Google Search grounding. Tries the fast Flash-Lite model first and the full
+    Flash second (the free tier's models are often overloaded or out of quota one at a time). If a plan refuses
+    grounding it asks once more without search (the model then answers from what it knows)."""
     key = os.environ["GEMINI_API_KEY"]
-    model = os.environ.get("GEMINI_MODEL") or "gemini-flash-latest"
-    url = f"https://generativelanguage.googleapis.com/v1beta/models/{urllib.parse.quote(model)}:generateContent"
+    models = [os.environ["GEMINI_MODEL"]] if os.environ.get("GEMINI_MODEL") else \
+        ["gemini-flash-lite-latest", "gemini-flash-latest"]
 
-    def call(search):
+    def call(model, search):
         body = {"contents": [{"parts": [{"text": prompt}]}]}
         if search:
             body["tools"] = [{"google_search": {}}]
-        req = urllib.request.Request(url, json.dumps(body).encode(),
-                                     {"Content-Type": "application/json", "x-goog-api-key": key})   # header, so it never lands in a URL
-        with urllib.request.urlopen(req, timeout=60) as r:
+        req = urllib.request.Request(
+            f"https://generativelanguage.googleapis.com/v1beta/models/{urllib.parse.quote(model)}:generateContent",
+            json.dumps(body).encode(),
+            {"Content-Type": "application/json", "x-goog-api-key": key})   # header, so it never lands in a URL
+        with urllib.request.urlopen(req, timeout=25) as r:
             return gemini_text(json.load(r))
 
-    try:
+    why = "no answer"
+    for model in models:
         try:
-            return call(True)
+            try:
+                return call(model, True)
+            except urllib.error.HTTPError as e:
+                if e.code not in (400, 403, 429):
+                    raise
+                return call(model, False)
         except urllib.error.HTTPError as e:
-            if e.code not in (400, 403, 429):
-                raise
-            return call(False)
-    except urllib.error.HTTPError as e:
-        try:
-            why = json.load(e)["error"]["message"]
-        except Exception:
-            why = ""
-        raise RuntimeError(f"Gemini said {e.code}: {why[:120]}" if why else f"Gemini said {e.code}")
+            try:
+                msg = json.load(e)["error"]["message"]
+            except Exception:
+                msg = ""
+            why = f"Gemini said {e.code}" + (f": {msg[:100]}" if msg else "")
+        except (OSError, ValueError):   # timeout, no network, bad reply
+            why = "Gemini did not answer in time"
+    raise RuntimeError(why)
 
 
 def provider():
