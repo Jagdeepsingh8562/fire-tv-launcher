@@ -238,11 +238,28 @@ def free_command(keep=None, aggressive=False):
 
 
 def free_memory(keep=None):
-    """Best effort: a failure here must not stop the app from opening. Video apps get the aggressive clean-up."""
+    """The quick clean-up before an app opens (about 2 s). Best effort: a failure must not stop the app opening."""
     try:
-        adb(free_command(keep, aggressive=keep in OTT), timeout=25)
+        adb(free_command(keep), timeout=15)
     except Exception as e:
         log(f"free_memory failed: {e}")
+
+
+def deep_clean_later(pkg):
+    """For a video app: once it has finished loading, also stop the AGGRESSIVE list. Before the app opens it added
+    7-10 s and was not felt (JioHotstar, 2026-11-10), and what it stops starts again when an app launches; after the
+    load it costs the user no wait and nothing respawns it for a while."""
+    if pkg not in OTT:
+        return
+
+    def run():
+        try:
+            wait_calm(pkg, BY_PACKAGE[pkg].get("boot", 0))
+            adb(free_command(pkg, aggressive=True), timeout=25)
+            log(f"deep clean after {BY_PACKAGE[pkg]['name']} loaded")
+        except Exception as e:
+            log(f"deep clean failed: {e}")
+    threading.Thread(target=run, daemon=True).start()
 
 
 def top_package(dump):
@@ -432,6 +449,7 @@ def play(pkg, tid):
         log(f"play failed: {e}")
     finally:
         STATUS["busy"] = False
+    deep_clean_later(pkg)
 
 
 def key_search(app, query, pick=False):
@@ -615,6 +633,8 @@ def act(plan, allowed):
     if card:   # the title page is on the TV; Play there opens the app
         return {"say": f"Showing {card['title']} on the TV. Pick where to play it.", "app": pkg, "query": query}
     searched = open_search(BY_PACKAGE[pkg], query, plan.get("play") is True)
+    if not BY_PACKAGE[pkg].get("key_search"):   # those apps are driven by keys next; a clean-up now would get in the way
+        deep_clean_later(pkg)
     if query and not searched:
         say += f" (search for “{query}” on the TV)"
     elif BY_PACKAGE[pkg].get("key_search") and query and BY_PACKAGE[pkg].get("profile"):
@@ -673,6 +693,7 @@ class Handler(BaseHTTPRequestHandler):
                     return self._json(400, {"error": "unknown app"})
                 free_memory(body["package"])
                 launch(body["package"])
+                deep_clean_later(body["package"])
                 return self._json(200, {"ok": True})
             if self.path == "/api/free":
                 return self._json(200, free_now())

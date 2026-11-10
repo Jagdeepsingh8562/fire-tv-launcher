@@ -3,6 +3,8 @@ package com.gathin.tvhome;
 import android.app.ActivityManager;
 import android.content.ComponentName;
 import android.content.Context;
+import android.os.Handler;
+import android.os.Looper;
 import android.content.Intent;
 import android.content.pm.PackageManager;
 import android.content.pm.ResolveInfo;
@@ -281,18 +283,21 @@ public class AppAdapter extends RecyclerView.Adapter<AppAdapter.Holder> {
 
     /**
      * The stick has ~900 MB and an app opening while others sit in the background is slow, so the others are
-     * stopped first, and for a video app Amazon's own background services as well. Only background processes
-     * die: anything playing (a foreground service) stays.
+     * stopped first. For a video app Amazon's own background services are stopped too, but 15 s later, once it
+     * has loaded: before the launch it was not felt, and they start again when an app launches. Only background
+     * processes die: anything playing (a foreground service) stays.
      */
-    private void freeMemoryFor(String keep) {
-        ActivityManager am = (ActivityManager) ctx.getSystemService(Context.ACTIVITY_SERVICE);
+    private void freeMemoryFor(final String keep) {
+        final ActivityManager am = (ActivityManager) ctx.getSystemService(Context.ACTIVITY_SERVICE);
         for (Entry other : items) {
             if (!other.pkg.equals(keep)) am.killBackgroundProcesses(other.pkg);
         }
         // Prime Video's player is a second package that has no tile of its own (~96 MB left behind).
         if (!keep.equals("com.amazon.firebat")) am.killBackgroundProcesses("com.amazon.avod");
         if (OTT.contains(keep)) {
-            for (String pkg : AGGRESSIVE) am.killBackgroundProcesses(pkg);
+            new Handler(Looper.getMainLooper()).postDelayed(() -> {
+                for (String pkg : AGGRESSIVE) am.killBackgroundProcesses(pkg);
+            }, 15_000);
         }
     }
 

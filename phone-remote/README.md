@@ -43,11 +43,12 @@ Open `http://<this computer's address>:5400` on a phone on the same Wi-Fi and ad
   cannot be reached, the TV opens the link directly. If JustWatch finds no match, Ask opens the app the old way.
 - **Memory:** the stick has ~900 MB, so before any app opens from here (Ask, an app button, a search) the
   server runs `am kill-all` and force-stops the other apps in `APPS`, plus Prime's player. For a video app
-  (`OTT` in `server.py`) it also force-stops the `AGGRESSIVE` list: Amazon's Appstore, photos, sync, Alexa and
-  Whisper helpers, the screensaver process and Amazon's own home, about 120 MB on this stick. They run four at a
-  time (about 4 s; one after another it is 16 s). The **Free memory** button always does the aggressive version,
-  keeps the app on screen, and shows the memory available before and after. Amazon's home stays down until the
-  next Home key press, which then takes a few seconds.
+  (`OTT` in `server.py`) it also force-stops the `AGGRESSIVE` list once the app has finished loading (not before:
+  that added 7 to 10 s and made no difference you could feel): Amazon's Appstore, photos, sync, Alexa and Whisper
+  helpers, the screensaver process and Amazon's own home. They run four at a time (about 4 to 7 s; one after
+  another it is 16 s). The **Free memory** button always does the aggressive version straight away, keeps the app
+  on screen, and shows the memory available before and after. Amazon's home stays down until the next Home key
+  press, which then takes a few seconds.
 - **No password:** anyone on your Wi-Fi can use it, like the TV remote on the table. Never forward a port
   to it. Put guests on a guest network.
 - `python3 phone-remote/server.py --selftest` checks that the model's answer cannot open anything else, and the

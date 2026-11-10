@@ -80,12 +80,14 @@ A small native Android TV home screen (`com.gathin.tvhome`), built for sets with
   which cannot be removed without root. So opening an app from the launcher first stops the other apps left in
   the background (Prime Video's player alone holds ~96 MB). Only background processes are stopped; anything
   playing stays. For a **video app** (YouTube, Netflix, JioHotstar, Prime Video, Apple TV, JioCinema) it goes
-  further and also stops Amazon's background apps that nothing needs while you watch: the Appstore, photos,
-  sync, Alexa and Whisper helpers, the screensaver process and Amazon's own home screen. Measured here that frees
-  about 120 MB (198 to 328 MB available); the small Whisper and Alexa services restart by themselves, the rest
-  stay down. The one cost: Amazon's home is stopped too, so the first Home key press afterwards takes a few
-  seconds to bring it back. The list is `AGGRESSIVE` in
-  [`AppAdapter.java`](launcher/app/src/main/java/com/gathin/tvhome/AppAdapter.java). `build-and-install.sh` also halves the system animation speed so the TV feels quicker; to undo
+  further 15 s after the tap, once the app has loaded: it also stops Amazon's background apps that nothing needs
+  while you watch (the Appstore, photos, sync, Alexa and Whisper helpers, the screensaver process and Amazon's own
+  home screen). Measured here that frees about 120 MB when the TV is idle; with JioHotstar open the difference was
+  small (Hotstar itself takes 120 to 180 MB) and not something you could feel, which is why it waits until the app
+  has loaded rather than delaying it. The small Whisper and Alexa services restart by themselves. The one cost:
+  Amazon's home is stopped too, so the first Home key press afterwards takes a few seconds to bring it back. The
+  list is `AGGRESSIVE` in [`AppAdapter.java`](launcher/app/src/main/java/com/gathin/tvhome/AppAdapter.java).
+  `build-and-install.sh` also halves the system animation speed so the TV feels quicker; to undo
   it, `adb shell settings put global window_animation_scale 1.0` (and `transition_animation_scale`,
   `animator_duration_scale`).
 
