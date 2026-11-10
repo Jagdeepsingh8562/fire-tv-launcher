@@ -50,7 +50,7 @@ A small native Android TV home screen (`com.gathin.tvhome`), built for sets with
   overlap its bottom edge, as in couch-tv's Night look. **Small clock** is the older top-left one.
 - **Keep watching** (after couch-tv): a row of glass cards above the dock for the apps you opened from
   this home, newest first. Fire OS 5 keeps no watch history, so it is apps only, not shows. Up from the
-  dock enters it.
+  dock enters it. It is **off by default**; Settings, Cards, Keep watching turns it on.
 - **Now playing** card, first in that row, while music plays in another app: cover, song, artist and
   previous / play-pause / next. It needs notification access, which `build-and-install.sh` switches on
   (`adb shell settings put secure enabled_notification_listeners com.gathin.tvhome/com.gathin.tvhome.MediaWatcherService`).
@@ -79,7 +79,13 @@ A small native Android TV home screen (`com.gathin.tvhome`), built for sets with
 - **Frees memory for the app you open.** The stick has ~900 MB and about half of it is Amazon's own services,
   which cannot be removed without root. So opening an app from the launcher first stops the other apps left in
   the background (Prime Video's player alone holds ~96 MB). Only background processes are stopped; anything
-  playing stays. `build-and-install.sh` also halves the system animation speed so the TV feels quicker; to undo
+  playing stays. For a **video app** (YouTube, Netflix, JioHotstar, Prime Video, Apple TV, JioCinema) it goes
+  further and also stops Amazon's background apps that nothing needs while you watch: the Appstore, photos,
+  sync, Alexa and Whisper helpers, the screensaver process and Amazon's own home screen. Measured here that frees
+  about 120 MB (198 to 328 MB available); the small Whisper and Alexa services restart by themselves, the rest
+  stay down. The one cost: Amazon's home is stopped too, so the first Home key press afterwards takes a few
+  seconds to bring it back. The list is `AGGRESSIVE` in
+  [`AppAdapter.java`](launcher/app/src/main/java/com/gathin/tvhome/AppAdapter.java). `build-and-install.sh` also halves the system animation speed so the TV feels quicker; to undo
   it, `adb shell settings put global window_animation_scale 1.0` (and `transition_animation_scale`,
   `animator_duration_scale`).
 

@@ -46,7 +46,8 @@ final class HomePrefs {
     }
 
     // ---- cards above the dock ------------------------------------------------------------------
-    static boolean keepWatching(Context c) { return p(c).getBoolean("keep_on", true); }
+    /** The recent-apps cards above the dock. Off unless switched on in Settings, Cards. */
+    static boolean keepWatching(Context c) { return p(c).getBoolean("keep_on", false); }
     static void keepWatching(Context c, boolean v) { p(c).edit().putBoolean("keep_on", v).apply(); }
 
     static boolean nowPlaying(Context c) { return p(c).getBoolean("np_on", true); }

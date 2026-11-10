@@ -260,9 +260,29 @@ public class AppAdapter extends RecyclerView.Adapter<AppAdapter.Holder> {
         }
     }
 
+    /** Video apps: opening one stops everything in AGGRESSIVE too. Keep in step with OTT and AGGRESSIVE in phone-remote/server.py. */
+    private static final Set<String> OTT = new HashSet<>(Arrays.asList("org.smarttube.stable", "com.netflix.ninja",
+            "in.startv.hotstar", "com.amazon.firebat", "com.apple.atve.amazon.appletv", "com.jio.media.stb.ondemand"));
+    /**
+     * Measured on this stick (895 MB): stopping these frees about 120 MB for good. The small Whisper, Alexa and
+     * discovery services start straight back; the rest stay down. Amazon's own home (com.amazon.tv.launcher) is in
+     * the list: with this launcher in front it does not come to the screen, but the next Home key press has to start
+     * it again, which takes a few seconds. Never list the keyboard (com.amazon.tv.ime), Bluetooth or this launcher.
+     */
+    private static final String[] AGGRESSIVE = {
+            "com.amazon.alexa.externalmediaplayer.fireos", "com.amazon.discoveryservice.core.android",
+            "com.amazon.kso.blackbird", "com.amazon.tv.alexaalerts", "com.amazon.whisperjoin.middleware.np",
+            "com.amazon.whisperjoin.wss.wifiprovisioner", "com.amazon.whisperlink.core.android", "com.amazon.sync.service",
+            "com.amazon.bueller.photos", "com.amazon.ceviche", "com.amazon.diode", "com.amazon.venezia",
+            "com.amazon.prism.android.service", "com.amazon.identity.auth.device.authorization",
+            "com.amazon.tv.notificationcenter", "com.amazon.tv.settings.v2", "com.amazon.webview.chromium",
+            "com.amazon.platform.fdrw", "com.android.providers.tv", "com.android.providers.downloads",
+            "io.github.thewombraider.pipestv", "com.amazon.tv.launcher"};
+
     /**
      * The stick has ~900 MB and an app opening while others sit in the background is slow, so the others are
-     * stopped first. Only background processes die: anything playing (a foreground service) stays.
+     * stopped first, and for a video app Amazon's own background services as well. Only background processes
+     * die: anything playing (a foreground service) stays.
      */
     private void freeMemoryFor(String keep) {
         ActivityManager am = (ActivityManager) ctx.getSystemService(Context.ACTIVITY_SERVICE);
@@ -271,6 +291,9 @@ public class AppAdapter extends RecyclerView.Adapter<AppAdapter.Holder> {
         }
         // Prime Video's player is a second package that has no tile of its own (~96 MB left behind).
         if (!keep.equals("com.amazon.firebat")) am.killBackgroundProcesses("com.amazon.avod");
+        if (OTT.contains(keep)) {
+            for (String pkg : AGGRESSIVE) am.killBackgroundProcesses(pkg);
+        }
     }
 
     @Override

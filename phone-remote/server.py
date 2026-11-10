@@ -204,18 +204,43 @@ def restart(package):
 SAME_APP = [{"com.amazon.firebat", "com.amazon.avod"}]   # Prime's screens and its player are two packages
 LAUNCHER = "com.gathin.tvhome"
 
+# The apps that stream video. Opening one frees memory harder: it also stops everything in AGGRESSIVE. Keep this in
+# step with OTT and AGGRESSIVE in launcher/.../AppAdapter.java, which does the same for taps on the TV itself.
+OTT = {"org.smarttube.stable", "com.netflix.ninja", "in.startv.hotstar", "com.amazon.firebat",
+       "com.apple.atve.amazon.appletv", "com.jio.media.stb.ondemand"}
+# Measured on this stick (895 MB, 2026-11-10): stopping these frees about 120 MB for good. The small Whisper, Alexa
+# and discovery services start straight back; the rest stay down. Amazon's own home (com.amazon.tv.launcher) is in
+# the list: with this launcher in front it does not come to the screen, but the next Home key press has to start it
+# again, which takes a few seconds. Never list the keyboard (com.amazon.tv.ime), Bluetooth or this launcher.
+AGGRESSIVE = [
+    "com.amazon.alexa.externalmediaplayer.fireos", "com.amazon.discoveryservice.core.android",
+    "com.amazon.kso.blackbird", "com.amazon.tv.alexaalerts", "com.amazon.whisperjoin.middleware.np",
+    "com.amazon.whisperjoin.wss.wifiprovisioner", "com.amazon.whisperlink.core.android", "com.amazon.sync.service",
+    "com.amazon.bueller.photos", "com.amazon.ceviche", "com.amazon.diode", "com.amazon.venezia",
+    "com.amazon.prism.android.service", "com.amazon.identity.auth.device.authorization",
+    "com.amazon.tv.notificationcenter", "com.amazon.tv.settings.v2", "com.amazon.webview.chromium",
+    "com.amazon.platform.fdrw", "com.android.providers.tv", "com.android.providers.downloads",
+    "io.github.thewombraider.pipestv", "com.amazon.tv.launcher",
+]
 
-def free_command(keep=None):
-    """Shell line that drops cached background processes and stops every app in APPS except `keep`."""
+
+def free_command(keep=None, aggressive=False):
+    """Shell line that drops cached background processes and stops every app in APPS except `keep`; with
+    aggressive, the AGGRESSIVE list too. Each `am force-stop` starts a Java process (~0.7 s on this CPU), so they run
+    four at a time: 24 of them take about 4 s that way and 16 s one after another."""
     spare = {keep}.union(*[g for g in SAME_APP if keep in g])
-    pkgs = {a["package"] for a in APPS}.union(*SAME_APP) - spare
-    return "; ".join(["am kill-all", *[f"am force-stop {p}" for p in sorted(pkgs)]])
+    pkgs = {a["package"] for a in APPS}.union(*SAME_APP)
+    if aggressive:
+        pkgs |= set(AGGRESSIVE)
+    pkgs = sorted(pkgs - spare)
+    lanes = [pkgs[i::4] for i in range(4) if pkgs[i::4]]
+    return "am kill-all; " + " ".join("(" + "; ".join(f"am force-stop {p}" for p in lane) + ") &" for lane in lanes) + " wait"
 
 
 def free_memory(keep=None):
-    """Best effort: a failure here must not stop the app from opening."""
+    """Best effort: a failure here must not stop the app from opening. Video apps get the aggressive clean-up."""
     try:
-        adb(free_command(keep), timeout=15)
+        adb(free_command(keep, aggressive=keep in OTT), timeout=25)
     except Exception as e:
         log(f"free_memory failed: {e}")
 
@@ -236,10 +261,10 @@ def available_mb():
 
 
 def free_now():
-    """The phone's Free memory button: stop the other apps but not the one on screen."""
+    """The phone's Free memory button: the aggressive clean-up, sparing the app on screen."""
     top = top_package(adb("dumpsys activity activities | grep mResumedActivity"))
     before = available_mb()
-    adb(free_command(None if top == LAUNCHER else top), timeout=15)
+    adb(free_command(None if top == LAUNCHER else top, aggressive=True), timeout=25)
     time.sleep(2)
     return {"say": f"Memory available: {before} → {available_mb()} MB"}
 
@@ -692,6 +717,13 @@ if __name__ == "__main__":
         assert cmd.startswith("am kill-all;") and "force-stop com.netflix.ninja" in cmd
         assert "force-stop org.smarttube.stable" not in cmd and "force-stop com.amazon.avod" in cmd
         assert "force-stop com.amazon.firebat" not in free_command("com.amazon.avod")   # Prime's two packages go together
+        assert "force-stop com.amazon.venezia" not in cmd and "force-stop com.amazon.tv.launcher" not in cmd   # light
+        hard = free_command("com.netflix.ninja", aggressive=True)
+        assert "force-stop com.amazon.venezia" in hard and "force-stop com.amazon.tv.launcher" in hard
+        assert "force-stop com.netflix.ninja" not in hard and hard.endswith(" wait") and hard.count("&") == 4
+        for never in (LAUNCHER, "com.amazon.tv.ime", "com.android.bluetooth", "com.amazon.client.metrics"):
+            assert never not in free_command(None, aggressive=True) and never not in AGGRESSIVE
+        assert OTT <= {a["package"] for a in APPS} | {"com.amazon.avod"}
         node = {"objectType": "SHOW", "content": {"title": "Suits", "originalReleaseYear": 2011, "shortDescription": "d",
                 "posterUrl": "/poster/1/{profile}/suits.{format}", "backdrops": [{"backdropUrl": "/backdrop/2/s1440/suits.jpg"}],
                 "runtime": 44, "scoring": {"imdbScore": 8.4, "imdbVotes": 552819}},
