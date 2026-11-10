@@ -24,3 +24,6 @@ screenshots/
 
 # API keys and local settings for the phone remote
 .env
+
+# Trademarked art and sounds for the PS5 home, copied in locally (see README, "PS5 home")
+launcher/app/src/main/assets/ps5/
