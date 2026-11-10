@@ -97,6 +97,30 @@ TV_HOST=192.168.1.50 launcher/build-and-install.sh
 Needs JDK 17 and the Android SDK (platform 34, build-tools 34.0.0). On macOS:
 `brew install openjdk@17 android-commandlinetools && sdkmanager "platforms;android-34" "build-tools;34.0.0"`.
 
+## Screensaver (Fire TV)
+
+A Fire TV's own screensaver is off unless you turn it on: its start time is the system setting
+`screen_off_timeout`, and it ships as "never" (`2147460000`). For something to show, this uses
+[3D Pipes: XP Screensaver](https://github.com/TheWombRaider/pipes-tv) (MIT): the classic pipes growing through a 3D
+lattice. It asks for no permissions and took about 2% CPU and 33 MB on a Fire TV Stick (2nd gen, Fire OS 5.2.9.5).
+It has no prebuilt APK and says Android 8+ (`minSdk 26`), but the code only uses APIs that Android 5 has, so build
+it with `minSdk 22` (same JDK and SDK as the launcher):
+
+```bash
+git clone --depth 1 https://github.com/TheWombRaider/pipes-tv.git && cd pipes-tv
+sed -i.bak 's/minSdk 26/minSdk 22/' app/build.gradle
+sh ./gradlew assembleRelease
+adb install -r app/build/outputs/apk/release/app-release.apk
+adb shell settings put secure screensaver_components io.github.thewombraider.pipestv/.PipesDream
+adb shell settings put secure screensaver_enabled 1
+adb shell settings put system screen_off_timeout 300000     # start after 5 minutes idle
+```
+
+To see it without waiting, set the timeout to `30000` and leave the TV alone; it can take a few seconds more than
+the timeout to appear. Any key press ends it. Changing the screensaver in Fire's own Settings may overwrite the
+`screensaver_components` line: run it again. Setting `screen_off_timeout` back to `2147460000` turns the idle
+start off again.
+
 ## Talking to the TV by hand
 
 ```bash

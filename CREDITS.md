@@ -19,6 +19,12 @@ generated for that project from text only, are not real places, and are free to 
 [Antonio](https://fonts.google.com/specimen/Antonio) (the big clock, as in couch-tv),
 under the SIL Open Font License.
 
+## Screensaver
+
+[3D Pipes: XP Screensaver](https://github.com/TheWombRaider/pipes-tv) by TheWombRaider (MIT) is not in this
+repo: the README shows how to build it from its source, changing only `minSdk` from 26 to 22. It is not affiliated
+with or endorsed by Microsoft, and its README says it contains no Microsoft code, images or sounds.
+
 ## Logos
 
 The dock icons for YouTube, Netflix, Prime Video and AirPlay are trademarks of their owners and are not in
