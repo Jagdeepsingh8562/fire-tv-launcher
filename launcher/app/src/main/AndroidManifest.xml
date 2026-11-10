@@ -54,6 +54,16 @@
             </intent-filter>
         </receiver>
 
+        <!-- The PS5 style home. MainActivity hands over to it, so Home, boot and the phone remote's Home key land here. -->
+        <activity
+            android:name=".Ps5Activity"
+            android:exported="false"
+            android:launchMode="singleTask"
+            android:stateNotNeeded="true"
+            android:excludeFromRecents="true"
+            android:configChanges="orientation|screenSize|keyboard|keyboardHidden|uiMode"
+            android:screenOrientation="landscape" />
+
         <activity
             android:name=".SettingsActivity"
             android:exported="false"

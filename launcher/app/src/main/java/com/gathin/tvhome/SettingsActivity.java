@@ -153,6 +153,18 @@ public class SettingsActivity extends Activity {
     }
 
     private void look() {
+        add(flagRow("Home layout", "PS5", "Classic", new Flag() {
+            public boolean get() { return HomePrefs.ps5(SettingsActivity.this); }
+            public void set(boolean v) { HomePrefs.ps5(SettingsActivity.this, v); }
+        }));
+        add(flagRow("Navigation sounds", "On", "Off", new Flag() {
+            public boolean get() { return HomePrefs.ps5Sound(SettingsActivity.this); }
+            public void set(boolean v) { HomePrefs.ps5Sound(SettingsActivity.this, v); }
+        }));
+        note("PS5 is the home with the pinned apps along the top, a picture behind the focused app and a click sound "
+                + "for each move (the pictures and sounds are optional files, see the README). Its last tile, All apps, "
+                + "opens the classic home with every app, Keep watching, Now playing and the power menu. The clock "
+                + "style below is for the classic home.");
         add(flagRow("Clock style", "Big", "Small", new Flag() {
             public boolean get() { return HomePrefs.bigClock(SettingsActivity.this); }
             public void set(boolean v) { HomePrefs.bigClock(SettingsActivity.this, v); }

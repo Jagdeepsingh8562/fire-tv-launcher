@@ -30,6 +30,9 @@
 
     <!-- Tiles per row in the grid, and the most apps the dock can hold. -->
     <integer name="columns">5</integer>
+    <!-- The home before one is chosen on the TV (Settings, Look): true is the PS5 style home (Ps5Activity, after the
+         Norma launcher), false the classic glass home. -->
+    <bool name="ps5_default">true</bool>
     <!-- Bluetooth button in the top bar: connects/disconnects the paired device whose name contains this. -->
     <string name="bt_device_name" translatable="false">CMF Buds</string>
     <!-- Weather beside the date (Open-Meteo, free, no key). Empty latitude: no weather. Find a place: https://open-meteo.com/en/docs/geocoding-api -->

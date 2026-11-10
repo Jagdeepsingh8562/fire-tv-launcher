@@ -119,6 +119,7 @@ public class MainActivity extends Activity implements AppAdapter.TileListener {
     @Override
     protected void onCreate(Bundle savedInstanceState) {
         super.onCreate(savedInstanceState);
+        if (handOverToPs5()) return;
         setContentView(R.layout.activity_main);
         density = getResources().getDisplayMetrics().density;
         COLUMNS = Math.max(1, getResources().getInteger(R.integer.columns));
@@ -288,6 +289,18 @@ public class MainActivity extends Activity implements AppAdapter.TileListener {
     protected void onNewIntent(Intent intent) {
         super.onNewIntent(intent);
         setIntent(intent);
+        handOverToPs5();
+    }
+
+    /**
+     * Home, boot and the phone remote's Home key all start this activity, so with the PS5 style home on it passes
+     * them on and closes. The PS5 home's All apps tile starts it with "classic", which keeps it open.
+     */
+    private boolean handOverToPs5() {
+        if (!HomePrefs.ps5(this) || getIntent().getBooleanExtra("classic", false)) return false;
+        startActivity(new Intent(this, Ps5Activity.class).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK));
+        finish();
+        return true;
     }
 
     @Override
@@ -340,7 +353,11 @@ public class MainActivity extends Activity implements AppAdapter.TileListener {
 
     @Override
     public void onBackPressed() {
-        // Home screen: Back goes nowhere.
+        // Home screen: Back goes nowhere, except from All apps back to the PS5 style home.
+        if (HomePrefs.ps5(this)) {
+            startActivity(new Intent(this, Ps5Activity.class).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK));
+            finish();
+        }
     }
 
     // ---- glass highlight -------------------------------------------------------------------------

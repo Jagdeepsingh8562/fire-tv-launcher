@@ -15,6 +15,14 @@ final class HomePrefs {
     }
 
     // ---- look ---------------------------------------------------------------------------------
+    /** The PS5 style home (Ps5Activity) or the classic one; config.xml says which one a fresh install starts with. */
+    static boolean ps5(Context c) { return p(c).getBoolean("ps5", c.getResources().getBoolean(R.bool.ps5_default)); }
+    static void ps5(Context c, boolean v) { p(c).edit().putBoolean("ps5", v).apply(); }
+
+    /** The PS5 home's click sounds, when the sound files are in the app. */
+    static boolean ps5Sound(Context c) { return p(c).getBoolean("ps5_sound", true); }
+    static void ps5Sound(Context c, boolean v) { p(c).edit().putBoolean("ps5_sound", v).apply(); }
+
     static boolean bigClock(Context c) { return p(c).getBoolean("clock_big", true); }
     static void bigClock(Context c, boolean v) { p(c).edit().putBoolean("clock_big", v).apply(); }
 
@@ -61,7 +69,7 @@ final class HomePrefs {
 
     /** Back to the defaults. The dock itself (which apps, in what order) is kept. */
     static void reset(Context c) {
-        p(c).edit().remove("clock_big").remove("clock_24").remove("wall_secs").remove("wall_off").remove("wx_on")
+        p(c).edit().remove("ps5").remove("ps5_sound").remove("clock_big").remove("clock_24").remove("wall_secs").remove("wall_off").remove("wx_on")
                 .remove("wx_f").remove("wx_name").remove("wx_lat").remove("wx_lon").remove("keep_on").remove("np_on")
                 .remove("hidden_extra").apply();
     }

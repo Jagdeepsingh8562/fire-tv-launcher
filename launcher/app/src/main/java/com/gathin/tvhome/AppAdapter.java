@@ -161,6 +161,10 @@ public class AppAdapter extends RecyclerView.Adapter<AppAdapter.Holder> {
         return position >= 0 && position < dockCount;
     }
 
+    Entry entryAt(int position) {
+        return items.get(position);
+    }
+
     String pkgAt(int position) {
         return position >= 0 && position < items.size() ? items.get(position).pkg : "";
     }

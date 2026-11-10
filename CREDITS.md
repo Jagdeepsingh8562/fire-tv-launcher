@@ -19,6 +19,14 @@ generated for that project from text only, are not real places, and are free to 
 [Antonio](https://fonts.google.com/specimen/Antonio) (the big clock, as in couch-tv),
 under the SIL Open Font License.
 
+## PS5 home
+
+The layout is after the Norma launcher by Ilham Asyari ([cleanyourtv-ps5-theme](https://github.com/ilhamasy/cleanyourtv-ps5-theme),
+MIT, itself a fork of CleanYourTV): apps along the top, a picture behind the focused one, click sounds. The code
+here is written for this launcher and copies none of it. The show art and the sounds that repo ships belong to
+their owners (streaming services' key art, and sounds it describes as PlayStation 5's), so they are not in this
+repo: git ignores `launcher/app/src/main/assets/ps5/`, and the README says how to add your own.
+
 ## Screensaver
 
 [3D Pipes: XP Screensaver](https://github.com/TheWombRaider/pipes-tv) by TheWombRaider (MIT) is not in this

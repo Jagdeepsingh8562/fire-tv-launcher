@@ -73,6 +73,12 @@ A small native Android TV home screen (`com.gathin.tvhome`), built for sets with
   **Sleep in 30, 60 or 90 min** (a sleep timer, cancelled from the same menu) and **Restart…**, which
   opens Fire TV's My Fire TV screen.
 
+- **PS5 home** (`Ps5Activity`, the default; Settings, Look, Home layout switches to the classic home): the pinned
+  apps in a row at the top left, the focused one enlarged with a glow in its own colour, a full-screen picture
+  for that app behind it, the app's name in large type, page dots, a small last-opened and app-size card, a click
+  sound for each move, and a weather pill, Wi-Fi and Settings at the top right. The last tile, **All apps**, opens
+  the classic home, which still has every app, Keep watching, Now playing and the power menu; Back returns.
+  After the [Norma launcher](https://github.com/ilhamasy/cleanyourtv-ps5-theme). See [PS5 home](#ps5-home).
 - **Title page** (`TitleActivity`): when the phone remote's Ask picks a title, the TV shows a page first, in the
   same glass style, with the poster, a short description and a **Play on** button for each of Netflix, Prime
   Video and JioHotstar that has it, rather than the app's own heavy home screen. See [phone-remote/](phone-remote/).
@@ -96,6 +102,24 @@ TV_HOST=192.168.1.50 launcher/build-and-install.sh
 
 Needs JDK 17 and the Android SDK (platform 34, build-tools 34.0.0). On macOS:
 `brew install openjdk@17 android-commandlinetools && sdkmanager "platforms;android-34" "build-tools;34.0.0"`.
+
+## PS5 home
+
+The PS5 home draws without any extra files, but its pictures and sounds are optional files that are **not in git**
+(they are other people's show art and sounds, like the dock logos above). Without them an app gets a gradient in
+its own colour and the home is silent. To add them, put them in `launcher/app/src/main/assets/ps5/` (git ignores
+that folder) and rebuild:
+
+| File | What it is |
+|---|---|
+| `art/<package>.jpg` | The picture behind an app, 1920 wide, a few hundred KB (`art/com.netflix.ninja.jpg`) |
+| `sounds/navigation.wav`, `sounds/enter.wav` | The click for a move and for a press (any format Android plays) |
+
+I took mine from the Norma launcher repo's `wallpapers/` and `sounds/` folders, resized with
+`sips -s format jpeg -s formatOptions 72 -Z 1920 in.jpg --out art/<package>.jpg` on macOS. Which package an app
+has is in `adb shell pm list packages`. Settings, Look turns the sounds off or switches back to the classic home;
+`ps5_default` in `config.xml` is what a fresh install starts with. Hold OK on the gear for the TV's own settings.
+The pinned apps are the dock from the classic home (edit them there, from All apps).
 
 ## Screensaver (Fire TV)
 
