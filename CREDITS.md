@@ -22,7 +22,8 @@ under the SIL Open Font License.
 ## Screensaver
 
 [3D Pipes: XP Screensaver](https://github.com/TheWombRaider/pipes-tv) by TheWombRaider (MIT) is not in this
-repo: the README shows how to build it from its source, changing only `minSdk` from 26 to 22. It is not affiliated
+repo: the README shows how to build it from its source, changing `minSdk` from 26 to 22 and applying a small patch of
+ours to its clear (`tools/pipes-tv-clear-fix.patch`, for GPUs with 16-bit pixel shaders). It is not affiliated
 with or endorsed by Microsoft, and its README says it contains no Microsoft code, images or sounds.
 
 ## Logos

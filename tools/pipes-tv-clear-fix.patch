@@ -1,0 +1,92 @@
+diff --git a/app/src/main/java/io/github/thewombraider/pipestv/PipesRenderer.java b/app/src/main/java/io/github/thewombraider/pipestv/PipesRenderer.java
+index 928052d..d8589f9 100644
+--- a/app/src/main/java/io/github/thewombraider/pipestv/PipesRenderer.java
++++ b/app/src/main/java/io/github/thewombraider/pipestv/PipesRenderer.java
+@@ -63,7 +63,7 @@ final class PipesRenderer implements GLSurfaceView.Renderer {
+     private final int fixtureMaterial;
+     private final float fixturePitch;
+     private int aPos, aNorMat, uMvp, uNormal, uAmbient, uDiffuse, uSpecular, uObject, uMaterial, uDebugNormals;
+-    private int overlay, oPos, uProgress, uBlock;
++    private int overlay, oPos, uProgress, uBlock, uNoise, noiseTexture;
+     private int batchVertices;
+ 
+     private final float[] proj = new float[16];
+@@ -159,6 +159,8 @@ final class PipesRenderer implements GLSurfaceView.Renderer {
+         oPos = GLES20.glGetAttribLocation(overlay, "aPos");
+         uProgress = GLES20.glGetUniformLocation(overlay, "uProgress");
+         uBlock = GLES20.glGetUniformLocation(overlay, "uBlock");
++        uNoise = GLES20.glGetUniformLocation(overlay, "uNoise");
++        noiseTexture = makeNoiseTexture();
+ 
+         GLES20.glUseProgram(program);
+         float[] amb = new float[Materials.COUNT * 3], dif = new float[Materials.COUNT * 3], spe = new float[Materials.COUNT * 4];
+@@ -367,6 +369,9 @@ final class PipesRenderer implements GLSurfaceView.Renderer {
+         GLES20.glUniform1f(uProgress, Math.min(1f, progress));
+         // Measured: squares 1/270 of the screen height (4 pixels at 1080 lines).
+         GLES20.glUniform1f(uBlock, Math.max(1f, Math.round(height / 270f)));
++        GLES20.glActiveTexture(GLES20.GL_TEXTURE0);
++        GLES20.glBindTexture(GLES20.GL_TEXTURE_2D, noiseTexture);
++        GLES20.glUniform1i(uNoise, 0);
+         GLES20.glBindBuffer(GLES20.GL_ARRAY_BUFFER, 0);
+         GLES20.glEnableVertexAttribArray(oPos);
+         GLES20.glVertexAttribPointer(oPos, 2, GLES20.GL_FLOAT, false, 0, QUAD);
+@@ -375,6 +380,37 @@ final class PipesRenderer implements GLSurfaceView.Renderer {
+         GLES20.glEnable(GLES20.GL_DEPTH_TEST);
+     }
+ 
++    /**
++     * The clear's random order: a 256 x 256 texture holding every level from 0 to 254 in equal numbers, shuffled. The
++     * clear used to get its order from a sin() hash in the shader, which falls apart on GPUs whose fragment shaders
++     * only do 16-bit maths (the Mali-450 in a Fire TV Stick 2nd gen): nearly every square went black at once and a
++     * few stripes of them hung about, as dashes along the pipes, for the whole clear.
++     */
++    private static int makeNoiseTexture() {
++        byte[] levels = new byte[256 * 256];
++        for (int i = 0; i < levels.length; i++) levels[i] = (byte) (i * 255 / levels.length);
++        Random shuffle = new Random(1);
++        for (int i = levels.length - 1; i > 0; i--) {
++            int j = shuffle.nextInt(i + 1);
++            byte t = levels[i];
++            levels[i] = levels[j];
++            levels[j] = t;
++        }
++        ByteBuffer pixels = ByteBuffer.allocateDirect(levels.length);
++        pixels.put(levels).position(0);
++        int[] id = new int[1];
++        GLES20.glGenTextures(1, id, 0);
++        GLES20.glBindTexture(GLES20.GL_TEXTURE_2D, id[0]);
++        GLES20.glPixelStorei(GLES20.GL_UNPACK_ALIGNMENT, 1);
++        GLES20.glTexImage2D(GLES20.GL_TEXTURE_2D, 0, GLES20.GL_LUMINANCE, 256, 256, 0, GLES20.GL_LUMINANCE,
++                GLES20.GL_UNSIGNED_BYTE, pixels);
++        GLES20.glTexParameteri(GLES20.GL_TEXTURE_2D, GLES20.GL_TEXTURE_MIN_FILTER, GLES20.GL_NEAREST);
++        GLES20.glTexParameteri(GLES20.GL_TEXTURE_2D, GLES20.GL_TEXTURE_MAG_FILTER, GLES20.GL_NEAREST);
++        GLES20.glTexParameteri(GLES20.GL_TEXTURE_2D, GLES20.GL_TEXTURE_WRAP_S, GLES20.GL_REPEAT);
++        GLES20.glTexParameteri(GLES20.GL_TEXTURE_2D, GLES20.GL_TEXTURE_WRAP_T, GLES20.GL_REPEAT);
++        return id[0];
++    }
++
+     private static final FloatBuffer QUAD = ByteBuffer.allocateDirect(12 * 4).order(ByteOrder.nativeOrder()).asFloatBuffer();
+ 
+     static {
+@@ -505,13 +541,17 @@ final class PipesRenderer implements GLSurfaceView.Renderer {
+     private static final String OVERLAY_VERTEX =
+             "attribute vec2 aPos; void main() { gl_Position = vec4(aPos, 0.0, 1.0); }\n";
+ 
+-    /** Each square of the screen has a fixed random moment in the clear; once the clear passes it, it is black. */
++    /** Each square of the screen has a fixed random moment in the clear, read from the noise texture; once the clear passes it, it is black. */
+     private static final String OVERLAY_FRAGMENT =
+-            "precision highp float;\n"
+-                    + "uniform float uProgress; uniform float uBlock;\n"
++            "#ifdef GL_FRAGMENT_PRECISION_HIGH\n"
++                    + "precision highp float;\n"
++                    + "#else\n"
++                    + "precision mediump float;\n"
++                    + "#endif\n"
++                    + "uniform float uProgress; uniform float uBlock; uniform sampler2D uNoise;\n"
+                     + "void main() {\n"
+                     + "  vec2 cell = floor(gl_FragCoord.xy / uBlock);\n"
+-                    + "  float r = fract(sin(dot(cell, vec2(12.9898, 78.233))) * 43758.5453);\n"
++                    + "  float r = texture2D(uNoise, (cell + 0.5) / 256.0).r;\n"
+                     + "  if (r < uProgress) gl_FragColor = vec4(0.0, 0.0, 0.0, 1.0); else discard;\n"
+                     + "}\n";
+ 

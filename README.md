@@ -117,12 +117,22 @@ it with `minSdk 22` (same JDK and SDK as the launcher):
 ```bash
 git clone --depth 1 https://github.com/TheWombRaider/pipes-tv.git && cd pipes-tv
 sed -i.bak 's/minSdk 26/minSdk 22/' app/build.gradle
+git apply /path/to/this/repo/tools/pipes-tv-clear-fix.patch     # see "The clear" below
 sh ./gradlew assembleRelease
 adb install -r app/build/outputs/apk/release/app-release.apk
 adb shell settings put secure screensaver_components io.github.thewombraider.pipestv/.PipesDream
 adb shell settings put secure screensaver_enabled 1
 adb shell settings put system screen_off_timeout 300000     # start after 5 minutes idle
 ```
+
+**The clear.** When a scene fills up, the screensaver eats it in small black squares in random order. On this
+stick's GPU (a Mali-450, whose pixel shaders only do 16-bit maths) the random order its shader computed with
+`sin()` collapses: nearly every square goes black at once and a few stripes of them hang about, as dashed
+fragments of pipe along the bottom of the screen, until the clear ends and the next scene starts. The patch,
+[`tools/pipes-tv-clear-fix.patch`](tools/pipes-tv-clear-fix.patch), takes the order from a shuffled 256 x 256
+texture instead, which works at any precision; the whole picture then dissolves evenly in random squares. To watch
+a clear slowly: `adb shell am start -n io.github.thewombraider.pipestv/.PipesActivity --ef timescale 2 --ef dissolve 60`
+(a scene at twice the speed and a clear 30 s long).
 
 To see it without waiting, set the timeout to `30000` and leave the TV alone; it can take a few seconds more than
 the timeout to appear. Any key press ends it. Changing the screensaver in Fire's own Settings may overwrite the
