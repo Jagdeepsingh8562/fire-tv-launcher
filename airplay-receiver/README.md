@@ -23,7 +23,9 @@ Screen Mirroring, **Fire Stick**. Play something with sound.
   shape (a portrait phone gets bars at the sides), with the sound in step.
 - Audio from the phone while mirroring. Pausing the sound no longer ends the mirror.
 - **Only while its app is open on the TV.** The picture is drawn into the app's window, so with another app in
-  front there is nothing to draw on. Come back to the app and the picture returns within a few seconds.
+  front there is nothing to draw on. If you leave the app during a session and come back, the session restarts: a
+  Mac reconnects by itself (about 10 to 30 seconds), an iPhone needs Screen Mirroring chosen again (a Mac sends only
+  one keyframe per session, and Android 5 cannot move a running decoder to a new surface).
 - **No AirPlay video casting.** The cast button inside apps such as YouTube hands the TV a video link to play
   itself; this receiver cannot do that and says so (it no longer advertises it). Use Screen Mirroring from
   Control Center and play the video on the phone.
@@ -54,6 +56,9 @@ The 2019 code worked once, for the first phone that connected, and then not agai
 - **Serves both services from one port.** The original advertised a different port for `_airplay._tcp`: a dummy
   socket that accepted one connection and never answered, so anything a phone sent there hung. Both services now
   point at the real server.
+- **Full screen, and no skipped frames.** No title bar; while mirroring only the picture is shown, and the app comes
+  to the front when a phone starts mirroring. Nothing is dropped for being late: some senders send one keyframe per
+  session, so a skipped frame would leave the picture broken for good.
 - **Survives a bad disconnect.** A phone that dropped without saying goodbye could leave the receiver stuck on the
   last picture, spinning at full CPU or full of dead connections. The video reader now checks every read and every
   length it is given, dead connections are noticed within about 15 seconds (TCP keepalive), a new session replaces

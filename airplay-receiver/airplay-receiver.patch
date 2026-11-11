@@ -106,7 +106,7 @@ index 5f59d84..6a9f827 100755
          </activity>
      </application>
 diff --git a/app/src/main/cpp/jni_raop_server.cpp b/app/src/main/cpp/jni_raop_server.cpp
-index 9aba07a..dd6874d 100755
+index 9aba07a..169d888 100755
 --- a/app/src/main/cpp/jni_raop_server.cpp
 +++ b/app/src/main/cpp/jni_raop_server.cpp
 @@ -10,39 +10,59 @@
@@ -234,6 +234,18 @@ index 9aba07a..dd6874d 100755
  
      unsigned short port = 0;
      raop_start(raop, &port);
+@@ -126,6 +162,11 @@ Java_com_fang_myapplication_RaopServer_getPort(JNIEnv* env, jobject object, jlon
+     return raop_get_port(raop);
+ }
+ 
++extern "C" JNIEXPORT void JNICALL
++Java_com_fang_myapplication_RaopServer_endSession(JNIEnv* env, jobject object, jlong opaque) {
++    raop_end_session((raop_t *) (void *) opaque);
++}
++
+ extern "C" JNIEXPORT void JNICALL
+ Java_com_fang_myapplication_RaopServer_stop(JNIEnv* env, jobject object, jlong opaque) {
+     raop_t *raop = (raop_t *) (void *) opaque;
 diff --git a/app/src/main/cpp/lib/httpd.c b/app/src/main/cpp/lib/httpd.c
 index fce9df7..74ffcb8 100755
 --- a/app/src/main/cpp/lib/httpd.c
@@ -321,7 +333,7 @@ index fce9df7..74ffcb8 100755
  				logger_log(httpd->logger, LOGGER_INFO, "Connection closed for socket %d", connection->socket_fd);
  				httpd_remove_connection(httpd, connection);
 diff --git a/app/src/main/cpp/lib/raop.c b/app/src/main/cpp/lib/raop.c
-index a6387b0..79f4ba8 100755
+index a6387b0..8bb621d 100755
 --- a/app/src/main/cpp/lib/raop.c
 +++ b/app/src/main/cpp/lib/raop.c
 @@ -52,6 +52,13 @@ struct raop_conn_s {
@@ -338,13 +350,14 @@ index a6387b0..79f4ba8 100755
  	unsigned char *local;
  	int locallen;
  
-@@ -61,6 +68,23 @@ struct raop_conn_s {
+@@ -61,6 +68,24 @@ struct raop_conn_s {
  };
  typedef struct raop_conn_s raop_conn_t;
  
 +/* Only one mirroring session is shown. The connection that last set one up owns it; when a phone connects again
 + * while an older connection is still open (it died without closing), the older one's streams are stopped. */
 +static raop_conn_t *g_active_conn = NULL;
++static volatile int g_end_requested = 0;
 +
 +static void
 +conn_stop_streams(raop_conn_t *conn)
@@ -362,7 +375,19 @@ index a6387b0..79f4ba8 100755
  #include "raop_handlers.h"
  
  static void *
-@@ -141,6 +165,17 @@ conn_request(void *ptr, http_request_t *request, http_response_t **response)
+@@ -130,6 +155,11 @@ conn_request(void *ptr, http_request_t *request, http_response_t **response)
+ {
+ 	raop_conn_t *conn = ptr;
+     logger_log(conn->raop->logger, LOGGER_DEBUG, "conn_request");
++	if (g_end_requested && conn == g_active_conn) {
++		g_end_requested = 0;
++		logger_log(conn->raop->logger, LOGGER_INFO, "Ending the session: the player cannot recover its picture");
++		conn_stop_streams(conn);
++	}
+ 	const char *method;
+ 	const char *url;
+ 	const char *cseq;
+@@ -141,6 +171,17 @@ conn_request(void *ptr, http_request_t *request, http_response_t **response)
  	url = http_request_get_url(request);
  	cseq = http_request_get_header(request, "CSeq");
  	if (!method || !cseq) {
@@ -380,7 +405,7 @@ index a6387b0..79f4ba8 100755
  		return;
  	}
  
-@@ -150,7 +185,7 @@ conn_request(void *ptr, http_request_t *request, http_response_t **response)
+@@ -150,7 +191,7 @@ conn_request(void *ptr, http_request_t *request, http_response_t **response)
  	//http_response_add_header(*response, "Apple-Jack-Status", "connected; type=analog");
  	http_response_add_header(*response, "Server", "AirTunes/220.68");
  
@@ -389,7 +414,7 @@ index a6387b0..79f4ba8 100755
  	raop_handler_t handler = NULL;
  	if (!strcmp(method, "GET") && !strcmp(url, "/info")) {
  		handler = &raop_handler_info;
-@@ -189,17 +224,40 @@ conn_request(void *ptr, http_request_t *request, http_response_t **response)
+@@ -189,17 +230,40 @@ conn_request(void *ptr, http_request_t *request, http_response_t **response)
  			logger_log(conn->raop->logger, LOGGER_WARNING, "RAOP not initialized at FLUSH");
  		}
  	} else if (!strcmp(method, "TEARDOWN")) {
@@ -440,7 +465,7 @@ index a6387b0..79f4ba8 100755
  	}
  	if (handler != NULL) {
  		handler(conn, request, *response, &response_data, &response_datalen);
-@@ -217,6 +275,9 @@ conn_destroy(void *ptr)
+@@ -217,6 +281,9 @@ conn_destroy(void *ptr)
  {
  	raop_conn_t *conn = ptr;
  
@@ -450,8 +475,22 @@ index a6387b0..79f4ba8 100755
  	if (conn->raop_rtp) {
  		/* This is done in case TEARDOWN was not called */
  		raop_rtp_destroy(conn->raop_rtp);
+@@ -289,6 +356,13 @@ raop_init(int max_clients, raop_callbacks_t *callbacks)
+ 	return raop;
+ }
+ 
++void
++raop_end_session(raop_t *raop)
++{
++	(void) raop;
++	g_end_requested = 1;
++}
++
+ void
+ raop_destroy(raop_t *raop)
+ {
 diff --git a/app/src/main/cpp/lib/raop.h b/app/src/main/cpp/lib/raop.h
-index 566bbd5..a385e88 100755
+index 566bbd5..78a143a 100755
 --- a/app/src/main/cpp/lib/raop.h
 +++ b/app/src/main/cpp/lib/raop.h
 @@ -33,6 +33,8 @@ struct raop_callbacks_s {
@@ -463,6 +502,16 @@ index 566bbd5..a385e88 100755
  
  	/* Optional but recommended callback functions */
  	void  (*audio_flush)(void *cls, void *session);
+@@ -51,6 +53,9 @@ RAOP_API void raop_set_log_callback(raop_t *raop, raop_log_callback_t callback,
+ RAOP_API void raop_set_port(raop_t *raop, unsigned short port);
+ RAOP_API unsigned short raop_get_port(raop_t *raop);
+ RAOP_API void *raop_get_callback_cls(raop_t *raop);
++/* Ask for the current mirroring session to be ended (the player cannot recover its picture): the sender then starts a
++ * new one. Safe from any thread; the HTTP thread, which owns the connection, acts on it at its next request. */
++RAOP_API void raop_end_session(raop_t *raop);
+ RAOP_API int raop_start(raop_t *raop, unsigned short *port);
+ RAOP_API int raop_is_running(raop_t *raop);
+ RAOP_API void raop_stop(raop_t *raop);
 diff --git a/app/src/main/cpp/lib/raop_handlers.h b/app/src/main/cpp/lib/raop_handlers.h
 index fdad0d5..8064719 100755
 --- a/app/src/main/cpp/lib/raop_handlers.h
@@ -1172,10 +1221,18 @@ index d874e47..7941c1e 100755
          txtRecord.set("md", "0,1,2");
          txtRecord.set("rhd", "5.6.0.0");
 diff --git a/app/src/main/java/com/fang/myapplication/MainActivity.java b/app/src/main/java/com/fang/myapplication/MainActivity.java
-index 9c93d12..559ae63 100755
+index 9c93d12..e6feeca 100755
 --- a/app/src/main/java/com/fang/myapplication/MainActivity.java
 +++ b/app/src/main/java/com/fang/myapplication/MainActivity.java
-@@ -14,7 +14,6 @@ public class MainActivity extends Activity implements View.OnClickListener {
+@@ -2,6 +2,7 @@ package com.fang.myapplication;
+ 
+ import android.app.Activity;
+ import android.content.Context;
++import android.content.Intent;
+ import android.os.Bundle;
+ import android.util.Log;
+ import android.view.SurfaceView;
+@@ -14,7 +15,6 @@ public class MainActivity extends Activity implements View.OnClickListener {
  
      public static String TAG = "MainActivity";
  
@@ -1183,13 +1240,33 @@ index 9c93d12..559ae63 100755
      private RaopServer mRaopServer;
      private DNSNotify mDNSNotify;
  
-@@ -32,51 +31,63 @@ public class MainActivity extends Activity implements View.OnClickListener {
+@@ -22,6 +22,8 @@ public class MainActivity extends Activity implements View.OnClickListener {
+     private Button mBtnControl;
+     private TextView mTxtDevice;
+     private boolean mIsStart = false;
++    private View mIdleView;
++    private volatile boolean mResumed = false;
+ 
+     @Override
+     protected void onCreate(Bundle savedInstanceState) {
+@@ -32,51 +34,104 @@ public class MainActivity extends Activity implements View.OnClickListener {
          mTxtDevice = findViewById(R.id.txt_device);
          mBtnControl.setOnClickListener(this);
          mSurfaceView = findViewById(R.id.surface);
 -        mAirPlayServer = new AirPlayServer();
          mRaopServer = new RaopServer(mSurfaceView);
-+        mRaopServer.setIdleView(findViewById(R.id.idle));
++        mIdleView = findViewById(R.id.idle);
++        mRaopServer.setListener(new RaopServer.Listener() {
++            @Override
++            public void onMirroringChanged(final boolean active) {
++                runOnUiThread(new Runnable() {
++                    @Override
++                    public void run() {
++                        showMirroring(active);
++                    }
++                });
++            }
++        });
          mDNSNotify = new DNSNotify();
 +        getWindow().addFlags(android.view.WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON);
 +        // Start listening at once: on a TV nobody wants to find the Start button first.
@@ -1199,6 +1276,36 @@ index 9c93d12..559ae63 100755
 +                if (!mIsStart) onClick(mBtnControl);
 +            }
 +        });
++    }
++
++    @Override
++    protected void onResume() {
++        super.onResume();
++        mResumed = true;
++    }
++
++    @Override
++    protected void onPause() {
++        mResumed = false;
++        super.onPause();
++    }
++
++    /**
++     * Mirroring: the picture alone, full screen, and this app in front. Not mirroring: the "Ready" screen with its
++     * button and the name.
++     */
++    private void showMirroring(boolean active) {
++        int chrome = active ? View.GONE : View.VISIBLE;
++        mIdleView.setVisibility(chrome);
++        mBtnControl.setVisibility(chrome);
++        mTxtDevice.setVisibility(chrome);
++        if (!active) {
++            mBtnControl.requestFocus();
++        } else if (!mResumed) {
++            // The phone started mirroring while another app was in front: bring this one up to show it.
++            startActivity(new Intent(this, MainActivity.class)
++                    .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK | Intent.FLAG_ACTIVITY_REORDER_TO_FRONT));
++        }
 +    }
 +
 +    @Override
@@ -1268,7 +1375,7 @@ index 9c93d12..559ae63 100755
      }
  
 diff --git a/app/src/main/java/com/fang/myapplication/RaopServer.java b/app/src/main/java/com/fang/myapplication/RaopServer.java
-index 93448da..4d1359c 100755
+index 93448da..6f26ea5 100755
 --- a/app/src/main/java/com/fang/myapplication/RaopServer.java
 +++ b/app/src/main/java/com/fang/myapplication/RaopServer.java
 @@ -3,6 +3,8 @@ package com.fang.myapplication;
@@ -1280,7 +1387,17 @@ index 93448da..4d1359c 100755
  
  import com.fang.myapplication.model.NALPacket;
  import com.fang.myapplication.model.PCMPacket;
-@@ -16,20 +18,68 @@ public class RaopServer implements SurfaceHolder.Callback {
+@@ -11,25 +13,83 @@ import com.fang.myapplication.player.VideoPlayer;
+ 
+ public class RaopServer implements SurfaceHolder.Callback {
+ 
++    /** Told when a mirroring session starts (true) and ends (false); called from a native thread. */
++    public interface Listener {
++        void onMirroringChanged(boolean active);
++    }
++
+     static {
+         System.loadLibrary("raop_server");
          System.loadLibrary("play-lib");
      }
      private static final String TAG = "RaopServer";
@@ -1290,13 +1407,23 @@ index 93448da..4d1359c 100755
 +    private final VideoPlayer mVideoPlayer;
 +    private final AudioPlayer mAudioPlayer;
 +    private final SurfaceView mSurfaceView;
-+    private volatile View mIdleView;
++    private volatile Listener mListener;
      private long mServerId = 0;
 +    /** A mirroring session is on screen: set by its first frame, cleared when the native side says it ended. */
 +    private volatile boolean mActive = false;
 +
 +    /** Sizes the picture to the phone's own shape (centred, bars at the sides) instead of stretching it. */
-+    private final VideoPlayer.SizeListener mSizeListener = new VideoPlayer.SizeListener() {
++    private final VideoPlayer.Callbacks mSizeListener = new VideoPlayer.Callbacks() {
++        @Override
++        public void onNeedNewSession() {
++            // The picture cannot be recovered (a Mac sends one keyframe per session): end the session, and the
++            // sender starts a new one. A Mac does so by itself; an iPhone needs Screen Mirroring chosen again.
++            long id = mServerId;
++            if (id != 0) {
++                endSession(id);
++            }
++        }
++
 +        @Override
 +        public void onVideoSize(final int width, final int height) {
 +            mSurfaceView.post(new Runnable() {
@@ -1325,22 +1452,17 @@ index 93448da..4d1359c 100755
 +        mVideoPlayer.start();
 +    }
 +
-+    /** The view shown while no session is on screen (it covers the last picture of the one that ended). */
-+    public void setIdleView(View idleView) {
-+        mIdleView = idleView;
-     }
- 
-+    private void showIdle(final boolean show) {
-+        final View idle = mIdleView;
-+        if (idle == null) return;
-+        mSurfaceView.post(new Runnable() {
-+            @Override
-+            public void run() {
-+                idle.setVisibility(show ? View.VISIBLE : View.GONE);
-+            }
-+        });
++    public void setListener(Listener listener) {
++        mListener = listener;
 +    }
 +
++    private void notifyMirroring(boolean active) {
++        Listener listener = mListener;
++        if (listener != null) {
++            listener.onMirroringChanged(active);
++        }
+     }
+ 
 +    // Called from native threads.
      public void onRecvVideoData(byte[] nal, int nalType, long dts, long pts) {
 -        Log.d(TAG, "onRecvVideoData pts = " + pts + ", nalType = " + nalType + ", nal length = " + nal.length);
@@ -1348,12 +1470,12 @@ index 93448da..4d1359c 100755
 +            mActive = true;
 +            Log.i(TAG, "mirroring started");
 +            mVideoPlayer.newSession();
-+            showIdle(false);
++            notifyMirroring(true);
 +        }
          NALPacket nalPacket = new NALPacket();
          nalPacket.nalData = nal;
          nalPacket.nalType = nalType;
-@@ -38,13 +88,21 @@ public class RaopServer implements SurfaceHolder.Callback {
+@@ -38,13 +98,21 @@ public class RaopServer implements SurfaceHolder.Callback {
      }
  
      public void onRecvAudioData(short[] pcm, long pts) {
@@ -1370,13 +1492,13 @@ index 93448da..4d1359c 100755
 +        mActive = false;
 +        mVideoPlayer.endSession();
 +        mAudioPlayer.flush();
-+        showIdle(true);
++        notifyMirroring(false);
 +    }
 +
      @Override
      public void surfaceCreated(SurfaceHolder holder) {
  
-@@ -52,15 +110,13 @@ public class RaopServer implements SurfaceHolder.Callback {
+@@ -52,15 +120,13 @@ public class RaopServer implements SurfaceHolder.Callback {
  
      @Override
      public void surfaceChanged(SurfaceHolder holder, int format, int width, int height) {
@@ -1395,7 +1517,7 @@ index 93448da..4d1359c 100755
      }
  
      public void startServer() {
-@@ -70,11 +126,25 @@ public class RaopServer implements SurfaceHolder.Callback {
+@@ -70,11 +136,25 @@ public class RaopServer implements SurfaceHolder.Callback {
      }
  
      public void stopServer() {
@@ -1424,6 +1546,12 @@ index 93448da..4d1359c 100755
      }
  
      public int getPort() {
+@@ -87,4 +167,5 @@ public class RaopServer implements SurfaceHolder.Callback {
+     private native long start();
+     private native void stop(long serverId);
+     private native int getPort(long serverId);
++    private native void endSession(long serverId);
+ }
 diff --git a/app/src/main/java/com/fang/myapplication/player/AudioPlayer.java b/app/src/main/java/com/fang/myapplication/player/AudioPlayer.java
 index 7175e45..90de7d0 100755
 --- a/app/src/main/java/com/fang/myapplication/player/AudioPlayer.java
@@ -1548,39 +1676,50 @@ index 7175e45..90de7d0 100755
 -
  }
 diff --git a/app/src/main/java/com/fang/myapplication/player/VideoPlayer.java b/app/src/main/java/com/fang/myapplication/player/VideoPlayer.java
-index 6502bac..97db99b 100755
+index 6502bac..0a1361a 100755
 --- a/app/src/main/java/com/fang/myapplication/player/VideoPlayer.java
 +++ b/app/src/main/java/com/fang/myapplication/player/VideoPlayer.java
-@@ -7,105 +7,298 @@ import android.view.Surface;
+@@ -7,105 +7,407 @@ import android.view.Surface;
  
  import com.fang.myapplication.model.NALPacket;
  
 +import java.io.IOException;
  import java.nio.ByteBuffer;
--import java.util.ArrayList;
+ import java.util.ArrayList;
 -import java.util.Collections;
 -import java.util.List;
 +import java.util.concurrent.LinkedBlockingQueue;
 +import java.util.concurrent.TimeUnit;
  
 +/**
-+ * Decodes the mirrored H.264 stream straight onto the surface, as fast as frames arrive, and recovers from what
-+ * goes wrong in real use: the stream ending, a new session starting, the surface going away (the app sent to the
-+ * background and brought back), the decoder failing, and the decoder falling behind.
++ * Decodes the mirrored H.264 stream straight onto the surface, as fast as frames arrive.
++ *
++ * The one thing to know: a decoder can only start at a keyframe, and some senders (a Mac) send exactly one, at the
++ * start of the session. So a frame must never be dropped (nothing after it would decode correctly again), and a
++ * decoder that is lost (an error, the surface gone) cannot simply start again mid-stream. What can be done:
++ * keep the frames since the last keyframe while there is no surface, and when the picture cannot be recovered ask
++ * for a new session, which makes the sender send a new keyframe.
 + */
  public class VideoPlayer extends Thread {
  
-+    public interface SizeListener {
++    public interface Callbacks {
 +        void onVideoSize(int width, int height);
++
++        /** The picture cannot be recovered in this session: ending it makes the sender start a new one. */
++        void onNeedNewSession();
 +    }
 +
      private static final String TAG = "VideoPlayer";
 +    private static final String MIME = "video/avc";
 +
-+    /** More than this waiting (about 1.5 s at 30 fps) means the decoder is behind: skip to the next keyframe. */
-+    private static final int MAX_QUEUED = 45;
-+    /** After the decoder is restarted, wait this long for a keyframe, then try whatever arrives. */
++    /** Frames kept while there is no surface (the app is in the background): the latest keyframe and what follows. */
++    private static final int MAX_PENDING_BYTES = 24 * 1024 * 1024;
++    /** A queue this long (about 30 s) means the decoder is hopelessly behind: give up on the session. */
++    private static final int MAX_QUEUED = 900;
++    /** How long to wait for a keyframe after the decoder was lost before asking for a new session. */
 +    private static final long KEYFRAME_WAIT_MS = 3000;
++    /** Do not ask for a new session more often than this. */
++    private static final long NEW_SESSION_BACKOFF_MS = 20000;
 +    /** After the decoder fails to start, wait this long before trying again. */
 +    private static final long RETRY_MS = 500;
 +
@@ -1588,6 +1727,7 @@ index 6502bac..97db99b 100755
 +    private static final int KIND_CONFIG = 0;
 +    private static final int KIND_SESSION_START = -1;
 +    private static final int KIND_SESSION_END = -2;
++    private static final int KIND_LOST = -3;
  
 -    private String mMimeType = "video/avc";
 -    private int mVideoWidth  = 540;
@@ -1597,11 +1737,10 @@ index 6502bac..97db99b 100755
 -    private Surface mSurface = null;
 -    private boolean mIsEnd = false;
 -    private List<NALPacket> mListBuffer = Collections.synchronizedList(new ArrayList<NALPacket>());
-+    private final SizeListener mSizeListener;
++    private final Callbacks mCallbacks;
 +    private final LinkedBlockingQueue<NALPacket> mQueue = new LinkedBlockingQueue<NALPacket>();
 +    private final MediaCodec.BufferInfo mInfo = new MediaCodec.BufferInfo();
- 
--    public VideoPlayer(Surface surface) {
++
 +    private volatile Surface mSurface;       // null while there is nothing to draw on
 +    private volatile byte[] mConfig;         // the latest SPS/PPS: what a decoder started mid-stream needs first
 +    private volatile boolean mIsEnd = false;
@@ -1612,16 +1751,21 @@ index 6502bac..97db99b 100755
 +    private boolean mNeedKeyframe = true;
 +    private long mKeyframeWaitSince = 0;
 +    private long mRetryAt = 0;
++    private long mNewSessionAskedAt = 0;
++    private long mLastKeyframeAt = 0;
++    private final ArrayList<NALPacket> mPending = new ArrayList<NALPacket>();
++    private int mPendingBytes = 0;
 +
 +    // Once a second in the log: how much arrived, how much was shown.
 +    private long mStatsAt = 0;
 +    private int mFedFrames = 0;
 +    private int mShownFrames = 0;
 +
-+    public VideoPlayer(SizeListener sizeListener) {
-+        mSizeListener = sizeListener;
++    public VideoPlayer(Callbacks callbacks) {
++        mCallbacks = callbacks;
 +    }
-+
+ 
+-    public VideoPlayer(Surface surface) {
 +    /** The surface to draw on, or null when it has gone (the app is in the background). */
 +    public void setSurface(Surface surface) {
          mSurface = surface;
@@ -1656,9 +1800,14 @@ index 6502bac..97db99b 100755
 +        if (nalPacket.nalType == KIND_CONFIG) {
 +            mConfig = nalPacket.nalData;
 +        }
++        if (mQueue.size() > MAX_QUEUED) {
++            Log.w(TAG, "decoder far behind, giving the session up");
++            mQueue.clear();
++            mQueue.add(marker(KIND_LOST));
++            return;
++        }
 +        mQueue.add(nalPacket);
-     }
--    
++    }
 +
 +    public void end() {
 +        mIsEnd = true;
@@ -1669,7 +1818,8 @@ index 6502bac..97db99b 100755
 +        NALPacket packet = new NALPacket();
 +        packet.nalType = kind;
 +        return packet;
-+    }
+     }
+-    
 +
      @Override
      public void run() {
@@ -1685,38 +1835,44 @@ index 6502bac..97db99b 100755
 +                NALPacket packet = mQueue.poll(20, TimeUnit.MILLISECONDS);
 +                // The surface changed or went away: the decoder is tied to the old one.
 +                if (mDecoder != null && mDecoderSurface != mSurface) {
-+                    Log.i(TAG, "surface changed: restarting the decoder");
++                    Log.i(TAG, "surface changed: the decoder has to start again");
 +                    releaseDecoder();
 +                    mNeedKeyframe = true;
-                 }
--                continue;
++                }
++                startFromPending();
 +                if (packet != null) {
 +                    handle(packet);
-+                }
+                 }
+-                continue;
 +                drain();
 +            } catch (InterruptedException e) {
 +                break;
 +            } catch (RuntimeException e) {
 +                // A MediaCodec that has failed throws on every call from then on: start a new one.
-+                Log.e(TAG, "decoder error, restarting it", e);
++                Log.e(TAG, "decoder error, starting it again", e);
 +                releaseDecoder();
 +                mNeedKeyframe = true;
 +                mRetryAt = System.currentTimeMillis() + RETRY_MS;
              }
 -            doDecode(mListBuffer.remove(0));
 +            logStats();
-         }
++        }
 +        releaseDecoder();
-     }
- 
--    private void doDecode(NALPacket nalPacket) {
--        final int TIMEOUT_USEC = 10000;
--        ByteBuffer[] decoderInputBuffers = mDecoder.getInputBuffers();
--        int inputBufIndex = -10000;
++    }
++
 +    private void handle(NALPacket packet) {
 +        switch (packet.nalType) {
 +            case KIND_SESSION_START:
 +            case KIND_SESSION_END:
++                releaseDecoder();
++                mPending.clear();
++                mPendingBytes = 0;
++                mNeedKeyframe = true;
++                mKeyframeWaitSince = 0;
++                mNewSessionAskedAt = 0;
++                mLastKeyframeAt = 0;
++                return;
++            case KIND_LOST:
 +                releaseDecoder();
 +                mNeedKeyframe = true;
 +                mKeyframeWaitSince = 0;
@@ -1730,24 +1886,26 @@ index 6502bac..97db99b 100755
 +                break;
 +        }
 +
++        boolean keyframe = containsKeyframe(packet.nalData);
++        if (keyframe) {
++            logKeyframe(packet);
++        }
 +        Surface surface = mSurface;
 +        if (surface == null || !surface.isValid()) {
-+            mNeedKeyframe = true; // nothing to draw on: what is missed cannot be picked up mid-stream
++            holdForSurface(packet, keyframe);
 +            return;
 +        }
-+        if (mQueue.size() > MAX_QUEUED) {
-+            mNeedKeyframe = true; // behind: drop frames until the next keyframe, which is quick as it decodes nothing
-+        }
 +        if (mNeedKeyframe) {
-+            long now = System.currentTimeMillis();
-+            if (!containsKeyframe(packet.nalData)) {
++            if (!keyframe) {
++                // Cannot be decoded without the keyframe: drop it, and if none comes ask for a new session.
++                long now = System.currentTimeMillis();
 +                if (mKeyframeWaitSince == 0) {
 +                    mKeyframeWaitSince = now;
 +                }
-+                if (now - mKeyframeWaitSince <= KEYFRAME_WAIT_MS) {
-+                    return;
++                if (now - mKeyframeWaitSince > KEYFRAME_WAIT_MS) {
++                    askForNewSession();
 +                }
-+                Log.w(TAG, "no keyframe for " + KEYFRAME_WAIT_MS + " ms, decoding what arrives");
++                return;
 +            }
 +            mNeedKeyframe = false;
 +            mKeyframeWaitSince = 0;
@@ -1762,11 +1920,75 @@ index 6502bac..97db99b 100755
 +        feed(packet.nalData, packet.pts);
 +    }
 +
++    private void askForNewSession() {
++        long now = System.currentTimeMillis();
++        if (mNewSessionAskedAt != 0 && now - mNewSessionAskedAt < NEW_SESSION_BACKOFF_MS) {
++            return;
+         }
++        mNewSessionAskedAt = now;
++        Log.w(TAG, "no keyframe for " + KEYFRAME_WAIT_MS + " ms: asking for a new session");
++        if (mCallbacks != null) {
++            mCallbacks.onNeedNewSession();
++        }
++    }
++
++    /** How often the sender sends a keyframe decides how a lost picture can come back. */
++    private void logKeyframe(NALPacket packet) {
++        long now = System.currentTimeMillis();
++        Log.i(TAG, "keyframe: " + (packet.nalData.length / 1024) + " KB, "
++                + (mLastKeyframeAt == 0 ? "the first" : (now - mLastKeyframeAt) + " ms after the last"));
++        mLastKeyframeAt = now;
++    }
++
++    /** No surface: keep the latest keyframe and everything after it, up to a size limit, to start from later. */
++    private void holdForSurface(NALPacket packet, boolean keyframe) {
++        mNeedKeyframe = true;
++        if (keyframe) {
++            mPending.clear();
++            mPendingBytes = 0;
++        } else if (mPending.isEmpty()) {
++            return; // nothing to start from: the picture will need a new keyframe
++        }
++        if (mPendingBytes + packet.nalData.length > MAX_PENDING_BYTES) {
++            mPending.clear(); // away too long to keep it all
++            mPendingBytes = 0;
++            return;
++        }
++        mPending.add(packet);
++        mPendingBytes += packet.nalData.length;
+     }
+ 
+-    private void doDecode(NALPacket nalPacket) {
+-        final int TIMEOUT_USEC = 10000;
+-        ByteBuffer[] decoderInputBuffers = mDecoder.getInputBuffers();
+-        int inputBufIndex = -10000;
++    /** A surface has appeared and frames were held: start the decoder from the held keyframe and catch up. */
++    private void startFromPending() {
++        Surface surface = mSurface;
++        if (mDecoder != null || mPending.isEmpty() || surface == null || !surface.isValid()) {
++            return;
++        }
++        if (System.currentTimeMillis() < mRetryAt) {
++            return;
++        }
++        Log.i(TAG, "starting from " + mPending.size() + " held frames");
++        createDecoder(surface);
++        mNeedKeyframe = false;
++        mKeyframeWaitSince = 0;
++        for (NALPacket held : mPending) {
++            feed(held.nalData, held.pts);
++        }
++        mPending.clear();
++        mPendingBytes = 0;
++    }
++
 +    private void createDecoder(Surface surface) {
 +        MediaFormat format = MediaFormat.createVideoFormat(MIME, 1920, 1080);
 +        // Lets the decoder change picture size (a phone turned sideways) without a restart.
 +        format.setInteger("max-width", 1920);
 +        format.setInteger("max-height", 1920);
++        // A keyframe of a busy 1080p picture can be far bigger than the decoder's default input buffer.
++        format.setInteger(MediaFormat.KEY_MAX_INPUT_SIZE, 2 * 1024 * 1024);
 +        MediaCodec codec;
          try {
 -            inputBufIndex = mDecoder.dequeueInputBuffer(TIMEOUT_USEC);
@@ -1789,14 +2011,14 @@ index 6502bac..97db99b 100755
 +        } catch (RuntimeException e) {
 +            codec.release();
 +            throw e;
-+        }
+         }
 +        mDecoder = codec;
 +        mDecoderSurface = surface;
 +        Log.i(TAG, "decoder started: " + codec.getName());
 +        byte[] config = mConfig;
 +        if (config != null) {
 +            feed(config, 0);
-         }
++        }
 +    }
  
 -        int outputBufferIndex = -10000;
@@ -1836,11 +2058,20 @@ index 6502bac..97db99b 100755
 +    }
 +
 +    private void feed(byte[] data, long pts) {
-+        for (int attempt = 0; attempt < 5 && !mIsEnd && mDecoder != null; attempt++) {
++        // A decoder just started can take a moment before it accepts input. Wait for it (up to about a second)
++        // rather than skip the frame: a frame lost now would corrupt everything after it, and a sender that
++        // sends one keyframe per session never sends the repair.
++        for (int attempt = 0; attempt < 200 && !mIsEnd && mDecoder != null; attempt++) {
 +            int index = mDecoder.dequeueInputBuffer(5000);
 +            if (index >= 0) {
 +                ByteBuffer input = mDecoder.getInputBuffer(index);
 +                input.clear();
++                if (data.length > input.capacity()) {
++                    Log.w(TAG, "frame of " + data.length + " bytes does not fit the decoder's " + input.capacity()
++                            + "-byte input");
++                    mDecoder.queueInputBuffer(index, 0, 0, pts, 0);
++                    return;
++                }
 +                input.put(data);
 +                mDecoder.queueInputBuffer(index, 0, data.length, pts, 0);
 +                mFedFrames++;
@@ -1850,7 +2081,12 @@ index 6502bac..97db99b 100755
 -            // not important for us, since we're using Surface
 +            drain(); // the decoder is full of finished pictures: show them, then try again
 +        }
-+        Log.w(TAG, "decoder busy, dropped a frame");
++        if (mDecoder != null) {
++            // Still not taking frames: it is stuck. Start a new decoder instead of carrying on with a gap.
++            Log.w(TAG, "decoder not accepting frames, starting it again");
++            releaseDecoder();
++            mNeedKeyframe = true;
++        }
 +    }
  
 -        } else if (outputBufferIndex == MediaCodec.INFO_OUTPUT_FORMAT_CHANGED) {
@@ -1899,11 +2135,11 @@ index 6502bac..97db99b 100755
 +                && format.containsKey("crop-top") && format.containsKey("crop-bottom")) {
 +            width = format.getInteger("crop-right") - format.getInteger("crop-left") + 1;
 +            height = format.getInteger("crop-bottom") - format.getInteger("crop-top") + 1;
-         }
-+        Log.i(TAG, "picture size " + width + "x" + height);
-+        if (mSizeListener != null && width > 0 && height > 0) {
-+            mSizeListener.onVideoSize(width, height);
 +        }
++        Log.i(TAG, "picture size " + width + "x" + height);
++        if (mCallbacks != null && width > 0 && height > 0) {
++            mCallbacks.onVideoSize(width, height);
+         }
 +    }
  
 +    private void logStats() {
@@ -1918,10 +2154,16 @@ index 6502bac..97db99b 100755
      }
  }
 diff --git a/app/src/main/res/layout/activity_main.xml b/app/src/main/res/layout/activity_main.xml
-index a48f644..1dc13f2 100755
+index a48f644..2ecf3c7 100755
 --- a/app/src/main/res/layout/activity_main.xml
 +++ b/app/src/main/res/layout/activity_main.xml
-@@ -9,17 +9,26 @@
+@@ -4,22 +4,32 @@
+     android:layout_width="match_parent"
+     android:layout_height="match_parent"
+     tools:context=".MainActivity"
++    android:background="#000000"
+     android:orientation="vertical">
+     <SurfaceView
          android:id="@+id/surface"
          android:layout_width="match_parent"
          android:layout_height="match_parent" />
@@ -1958,6 +2200,22 @@ index 680c0f2..1549361 100755
  <resources>
 -    <string name="app_name">My Application</string>
 +    <string name="app_name">AirPlay Receiver</string>
+ </resources>
+diff --git a/app/src/main/res/values/styles.xml b/app/src/main/res/values/styles.xml
+index 02ce4c8..66aba0f 100755
+--- a/app/src/main/res/values/styles.xml
++++ b/app/src/main/res/values/styles.xml
+@@ -1,8 +1,9 @@
+ <resources>
+ 
+     <!-- Base application theme. -->
+-    <style name="AppTheme" parent="android:Theme.Material.Light.DarkActionBar">
+-        <!-- Customize your theme here. -->
++    <!-- No action bar and no status bar: the mirrored picture gets the whole screen. -->
++    <style name="AppTheme" parent="android:Theme.Material.NoActionBar.Fullscreen">
++        <item name="android:windowBackground">@android:color/black</item>
+     </style>
+ 
  </resources>
 diff --git a/build.gradle b/build.gradle
 index 5f89027..f4fa5de 100755
