@@ -566,10 +566,69 @@ index fdad0d5..8064719 100755
              raop_rtp_start_audio(conn->raop_rtp, use_udp, remote_cport, remote_tport, &cport, &tport, &dport);
              logger_log(conn->raop->logger, LOGGER_DEBUG, "RAOP initialized success");
 diff --git a/app/src/main/cpp/lib/raop_rtp.c b/app/src/main/cpp/lib/raop_rtp.c
-index 46f9390..5691757 100755
+index 46f9390..7e76ef7 100755
 --- a/app/src/main/cpp/lib/raop_rtp.c
 +++ b/app/src/main/cpp/lib/raop_rtp.c
-@@ -463,7 +463,10 @@ raop_rtp_thread_udp(void *arg)
+@@ -17,6 +17,11 @@
+ #include <string.h>
+ #include <assert.h>
+ #include <errno.h>
++#ifndef WIN32
++#include <sys/socket.h>
++#include <sys/time.h>
++#include <unistd.h>
++#endif
+ 
+ #include "raop_rtp.h"
+ #include "raop.h"
+@@ -217,6 +222,19 @@ raop_rtp_resend_callback(void *opaque, unsigned short seqnum, unsigned short cou
+     return 0;
+ }
+ 
++/* The timing thread asks the phone for the time every 3 s and waits for the answer. Without a timeout it waits for
++ * ever once the phone stops answering, the thread never ends, and stopping the session (which joins it) hangs. */
++static void
++raop_rtp_set_recv_timeout(int fd)
++{
++#ifndef WIN32
++    struct timeval timeout;
++    timeout.tv_sec = 1;
++    timeout.tv_usec = 0;
++    setsockopt(fd, SOL_SOCKET, SO_RCVTIMEO, (const char *)&timeout, sizeof(timeout));
++#endif
++}
++
+ static int
+ raop_rtp_init_sockets(raop_rtp_t *raop_rtp, int use_ipv6, int use_udp)
+ {
+@@ -233,6 +251,8 @@ raop_rtp_init_sockets(raop_rtp_t *raop_rtp, int use_ipv6, int use_udp)
+         goto sockets_cleanup;
+     }
+ 
++    raop_rtp_set_recv_timeout(tsock);
++
+     /* Set socket descriptors */
+     raop_rtp->csock = csock;
+     raop_rtp->tsock = tsock;
+@@ -391,8 +411,15 @@ raop_rtp_thread_time(void *arg)
+         logger_log(raop_rtp->logger, LOGGER_DEBUG, "raop_rtp_thread_time sendlen = %d", sendlen);
+ 
+         saddrlen = sizeof(saddr);
+-        packetlen = recvfrom(raop_rtp->tsock, (char *)packet, sizeof(packet), 0,
+-                             (struct sockaddr *)&saddr, &saddrlen);
++        int received = recvfrom(raop_rtp->tsock, (char *)packet, sizeof(packet), 0,
++                                (struct sockaddr *)&saddr, &saddrlen);
++        if (received < 32) {
++            /* No answer within the receive timeout (the sender is gone or slow), or an error. Look at `running`
++             * again instead of waiting for ever: this thread not ending made stopping the session hang the app. */
++            usleep(200000);
++            continue;
++        }
++        packetlen = received;
+         int type_t = packet[1] & ~0x80;
+         logger_log(raop_rtp->logger, LOGGER_DEBUG, "raop_rtp_thread_time receive time type_t 0x%02x, packetlen = %d", type_t, packetlen);
+         if (type_t == 0x53) {
+@@ -463,7 +490,10 @@ raop_rtp_thread_udp(void *arg)
              /* Timeout happened */
              continue;
          } else if (ret == -1) {
@@ -582,10 +641,10 @@ index 46f9390..5691757 100755
          }
  
 diff --git a/app/src/main/cpp/lib/raop_rtp_mirror.c b/app/src/main/cpp/lib/raop_rtp_mirror.c
-index 792b1bd..8a3e707 100755
+index 792b1bd..0890d22 100755
 --- a/app/src/main/cpp/lib/raop_rtp_mirror.c
 +++ b/app/src/main/cpp/lib/raop_rtp_mirror.c
-@@ -9,6 +9,12 @@
+@@ -9,6 +9,13 @@
  #include <string.h>
  #include <assert.h>
  #include <errno.h>
@@ -594,11 +653,30 @@ index 792b1bd..8a3e707 100755
 +#include <netinet/tcp.h>
 +#include <sys/socket.h>
 +#include <sys/time.h>
++#include <unistd.h>
 +#endif
  
  #include "raop.h"
  #include "netutils.h"
-@@ -201,6 +207,77 @@ raop_rtp_mirror_thread_time(void *arg)
+@@ -167,8 +174,15 @@ raop_rtp_mirror_thread_time(void *arg)
+         logger_log(raop_rtp_mirror->logger, LOGGER_DEBUG, "raop_rtp_mirror_thread_time sendlen = %d", sendlen);
+ 
+         saddrlen = sizeof(saddr);
+-        packetlen = recvfrom(raop_rtp_mirror->mirror_time_sock, (char *)packet, sizeof(packet), 0,
+-                             (struct sockaddr *)&saddr, &saddrlen);
++        int received = recvfrom(raop_rtp_mirror->mirror_time_sock, (char *)packet, sizeof(packet), 0,
++                                (struct sockaddr *)&saddr, &saddrlen);
++        if (received < 48) {
++            /* No answer within the receive timeout (the phone is gone or slow), or an error. Look at `running`
++             * again instead of waiting for ever. */
++            usleep(200000);
++            continue;
++        }
++        packetlen = received;
+         logger_log(raop_rtp_mirror->logger, LOGGER_DEBUG, "raop_rtp_mirror_thread_time receive time packetlen = %d", packetlen);
+         // 16-24 系统时钟最后一次被设定或更新的时间。
+         uint64_t Reference_Timestamp = byteutils_read_timeStamp(packet, 16);
+@@ -201,6 +215,91 @@ raop_rtp_mirror_thread_time(void *arg)
  }
  //#define DUMP_H264
  
@@ -656,6 +734,20 @@ index 792b1bd..8a3e707 100755
 +    return 0;
 +}
 +
++/* The timing thread asks the phone for the time every 3 s and waits for the answer. Without a timeout it waits for
++ * ever once the phone stops answering, the thread never ends, and stopping the session (which joins it) hangs the
++ * whole app: this is what froze the receiver when a Mac ended mirroring. */
++static void
++mirror_set_recv_timeout(int fd)
++{
++#ifndef WIN32
++    struct timeval timeout;
++    timeout.tv_sec = 1;
++    timeout.tv_usec = 0;
++    setsockopt(fd, SOL_SOCKET, SO_RCVTIMEO, (const char *)&timeout, sizeof(timeout));
++#endif
++}
++
 +/* Probe an idle connection (a phone that vanished) and never block for ever on a half-sent frame. */
 +static void
 +mirror_set_socket_options(int fd)
@@ -676,7 +768,7 @@ index 792b1bd..8a3e707 100755
  #define RAOP_PACKET_LEN 32768
  /**
   * 镜像
-@@ -253,8 +330,10 @@ raop_rtp_mirror_thread(void *arg)
+@@ -253,8 +352,10 @@ raop_rtp_mirror_thread(void *arg)
              /* Timeout happened */
              continue;
          } else if (ret == -1) {
@@ -689,7 +781,7 @@ index 792b1bd..8a3e707 100755
              break;
          }
          if (stream_fd == -1 && FD_ISSET(raop_rtp_mirror->mirror_data_sock, &rfds)) {
-@@ -269,6 +348,7 @@ raop_rtp_mirror_thread(void *arg)
+@@ -269,6 +370,7 @@ raop_rtp_mirror_thread(void *arg)
                  logger_log(raop_rtp_mirror->logger, LOGGER_INFO, "Error in accept %d %s", errno, strerror(errno));
                  break;
              }
@@ -697,7 +789,7 @@ index 792b1bd..8a3e707 100755
          }
          if (stream_fd != -1 && FD_ISSET(stream_fd, &rfds)) {
              // packetlen初始0
-@@ -278,8 +358,10 @@ raop_rtp_mirror_thread(void *arg)
+@@ -278,8 +380,10 @@ raop_rtp_mirror_thread(void *arg)
                  logger_log(raop_rtp_mirror->logger, LOGGER_INFO, "TCP socket closed");
                  break;
              } else if (ret == -1) {
@@ -710,7 +802,7 @@ index 792b1bd..8a3e707 100755
                  break;
              }
              readstart += ret;
-@@ -291,15 +373,17 @@ raop_rtp_mirror_thread(void *arg)
+@@ -291,15 +395,17 @@ raop_rtp_mirror_thread(void *arg)
                  logger_log(raop_rtp_mirror->logger, LOGGER_DEBUG, "handle http data");
              } else {
                  // 普通数据块
@@ -735,7 +827,7 @@ index 792b1bd..8a3e707 100755
  
                  // 处理内容数据
                  if (payloadtype == 0) {
-@@ -311,143 +395,94 @@ raop_rtp_mirror_thread(void *arg)
+@@ -311,143 +417,94 @@ raop_rtp_mirror_thread(void *arg)
                          pts =  ntptopts(payloadntp) - pts_base;
                      }
                      // 这里是加密的数据
@@ -952,7 +1044,7 @@ index 792b1bd..8a3e707 100755
                      }
                  }
              }
-@@ -456,10 +491,15 @@ raop_rtp_mirror_thread(void *arg)
+@@ -456,10 +513,15 @@ raop_rtp_mirror_thread(void *arg)
          }
      }
  
@@ -968,6 +1060,15 @@ index 792b1bd..8a3e707 100755
      logger_log(raop_rtp_mirror->logger, LOGGER_INFO, "Exiting TCP raop_rtp_mirror_thread thread");
  #ifdef DUMP_H264
      fclose(file);
+@@ -564,6 +626,8 @@ raop_rtp_init_mirror_sockets(raop_rtp_mirror_t *raop_rtp_mirror, int use_ipv6)
+         goto sockets_cleanup;
+ 
+ 
++    mirror_set_recv_timeout(tsock);
++
+     /* Set socket descriptors */
+     raop_rtp_mirror->mirror_data_sock = dsock;
+     raop_rtp_mirror->mirror_time_sock = tsock;
 diff --git a/app/src/main/java/com/fang/myapplication/AirPlayServer.java b/app/src/main/java/com/fang/myapplication/AirPlayServer.java
 deleted file mode 100755
 index 64f4b1a..0000000
@@ -1167,7 +1268,7 @@ index 9c93d12..559ae63 100755
      }
  
 diff --git a/app/src/main/java/com/fang/myapplication/RaopServer.java b/app/src/main/java/com/fang/myapplication/RaopServer.java
-index 93448da..d77dfc0 100755
+index 93448da..4d1359c 100755
 --- a/app/src/main/java/com/fang/myapplication/RaopServer.java
 +++ b/app/src/main/java/com/fang/myapplication/RaopServer.java
 @@ -3,6 +3,8 @@ package com.fang.myapplication;
@@ -1294,20 +1395,35 @@ index 93448da..d77dfc0 100755
      }
  
      public void startServer() {
-@@ -77,6 +133,13 @@ public class RaopServer implements SurfaceHolder.Callback {
- 
+@@ -70,11 +126,25 @@ public class RaopServer implements SurfaceHolder.Callback {
      }
+ 
+     public void stopServer() {
+-        if (mServerId != 0) {
+-            stop(mServerId);
+-        }
++        final long id = mServerId;
+         mServerId = 0;
++        if (id != 0) {
++            // Stopping joins the native threads, which can take a moment; the UI thread must never wait for that
++            // (a thread that did not end froze the whole app, and Android reported it as not responding).
++            new Thread(new Runnable() {
++                @Override
++                public void run() {
++                    stop(id);
++                }
++            }, "raop-stop").start();
++        }
++    }
  
 +    /** Stops the server and the two player threads, which hold the decoder and the audio track: call it when the app closes. */
 +    public void release() {
 +        stopServer();
 +        mVideoPlayer.end();
 +        mAudioPlayer.stopPlay();
-+    }
-+
+     }
+ 
      public int getPort() {
-         if (mServerId != 0) {
-             return getPort(mServerId);
 diff --git a/app/src/main/java/com/fang/myapplication/player/AudioPlayer.java b/app/src/main/java/com/fang/myapplication/player/AudioPlayer.java
 index 7175e45..90de7d0 100755
 --- a/app/src/main/java/com/fang/myapplication/player/AudioPlayer.java

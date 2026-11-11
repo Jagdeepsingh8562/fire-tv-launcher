@@ -59,7 +59,8 @@ The 2019 code worked once, for the first phone that connected, and then not agai
   length it is given, dead connections are noticed within about 15 seconds (TCP keepalive), a new session replaces
   a stale one, and the decoder restarts itself after an error, a lost surface or falling behind. When a session
   ends the TV goes back to a "Ready" screen instead of keeping the last frame, and closing the app releases the
-  decoder so it can be opened again.
+  decoder so it can be opened again. A phone that stopped answering the timing requests used to freeze the whole
+  app when its session was stopped; those waits now time out.
 - Asks for only the permissions it uses, has a TV launcher entry, keeps the screen on, and starts listening on
   its own.
 
