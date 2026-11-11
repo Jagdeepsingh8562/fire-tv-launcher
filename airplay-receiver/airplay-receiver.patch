@@ -68,10 +68,10 @@ index a32b716..52df79c 100755
 -    androidTestImplementation 'com.android.support.test.espresso:espresso-core:3.0.2'
  }
 diff --git a/app/src/main/AndroidManifest.xml b/app/src/main/AndroidManifest.xml
-index 5f59d84..6a9f827 100755
+index 5f59d84..3e75e51 100755
 --- a/app/src/main/AndroidManifest.xml
 +++ b/app/src/main/AndroidManifest.xml
-@@ -1,13 +1,12 @@
+@@ -1,13 +1,14 @@
  <?xml version="1.0" encoding="utf-8"?>
  <manifest xmlns:android="http://schemas.android.com/apk/res/android"
 -    package="com.fang.myapplication">
@@ -83,13 +83,15 @@ index 5f59d84..6a9f827 100755
      <uses-permission android:name="android.permission.ACCESS_WIFI_STATE" />
      <uses-permission android:name="android.permission.INTERNET"/>
 -    <uses-permission android:name="android.permission.RECORD_AUDIO"/>
++    <!-- for the high-performance Wi-Fi lock -->
++    <uses-permission android:name="android.permission.WAKE_LOCK" />
 +
 +    <uses-feature android:name="android.software.leanback" android:required="false" />
 +    <uses-feature android:name="android.hardware.touchscreen" android:required="false" />
  
      <application
          android:allowBackup="true"
-@@ -16,11 +15,14 @@
+@@ -16,11 +17,14 @@
          android:roundIcon="@mipmap/ic_launcher_round"
          android:supportsRtl="true"
          android:theme="@style/AppTheme">
@@ -513,10 +515,48 @@ index 566bbd5..78a143a 100755
  RAOP_API int raop_is_running(raop_t *raop);
  RAOP_API void raop_stop(raop_t *raop);
 diff --git a/app/src/main/cpp/lib/raop_handlers.h b/app/src/main/cpp/lib/raop_handlers.h
-index fdad0d5..8064719 100755
+index fdad0d5..624f6cc 100755
 --- a/app/src/main/cpp/lib/raop_handlers.h
 +++ b/app/src/main/cpp/lib/raop_handlers.h
-@@ -53,7 +53,7 @@ raop_handler_info(raop_conn_t *conn,
+@@ -21,6 +21,37 @@
+ typedef void (*raop_handler_t)(raop_conn_t *, http_request_t *,
+                                http_response_t *, char **, int *);
+ 
++/* Diagnostics: the first few request bodies, to see what the sender asks of the receiver (resolution, rates,
++ * latency). The first setup carries the session keys and is not logged. */
++static void
++log_request_plist(raop_conn_t *conn, const char *what, plist_t root)
++{
++    static int logged = 0;
++    char *xml = NULL;
++    uint32_t len = 0, off;
++    if (logged >= 16 || !root) {
++        return;
++    }
++    logged++;
++    if (plist_dict_get_item(root, "ekey") != NULL) {
++        logger_log(conn->raop->logger, LOGGER_INFO, "%s: the first setup (keys not logged)", what);
++        return;
++    }
++    plist_to_xml(root, &xml, &len);
++    if (!xml) {
++        return;
++    }
++    logger_log(conn->raop->logger, LOGGER_INFO, "%s plist, %u bytes:", what, len);
++    for (off = 0; off < len; off += 600) {
++        char chunk[601];
++        uint32_t n = len - off < 600 ? len - off : 600;
++        memcpy(chunk, xml + off, n);
++        chunk[n] = 0;
++        logger_log(conn->raop->logger, LOGGER_INFO, "%s", chunk);
++    }
++    free(xml);
++}
++
+ static void
+ raop_handler_info(raop_conn_t *conn,
+ 					   http_request_t *request, http_response_t *response,
+@@ -53,7 +84,7 @@ raop_handler_info(raop_conn_t *conn,
  			,0x65,0x54,0xe7,0x5a,0x6d,0x61,0x63,0x41,0x64,0x64,0x72,0x65,0x73,0x73,0x10,0x02
  			,0xa1,0x2c,0x10,0x04,0xa2,0x13,0x19,0x5c,0x61,0x75,0x64,0x69,0x6f,0x46,0x6f,0x72
  			,0x6d,0x61,0x74,0x73,0x54,0x6e,0x61,0x6d,0x65,0x08,0x52,0x76,0x76,0x13,0x00,0x00
@@ -525,7 +565,7 @@ index fdad0d5..8064719 100755
  			,0x74,0x65,0x6e,0x63,0x79,0x4d,0x69,0x63,0x72,0x6f,0x73,0x5b,0x73,0x74,0x61,0x74
  			,0x75,0x73,0x46,0x6c,0x61,0x67,0x73,0x57,0x41,0x70,0x70,0x6c,0x65,0x54,0x56,0xd4
  			,0x1e,0x20,0x22,0x16,0x1f,0x21,0x21,0x17,0x57,0x64,0x65,0x66,0x61,0x75,0x6c,0x74
-@@ -225,7 +225,6 @@ raop_handler_options(raop_conn_t *conn,
+@@ -225,7 +256,6 @@ raop_handler_options(raop_conn_t *conn,
  	http_response_add_header(response, "Public", "SETUP, RECORD, PAUSE, FLUSH, TEARDOWN, OPTIONS, GET_PARAMETER, SET_PARAMETER");
  }
  
@@ -533,9 +573,11 @@ index fdad0d5..8064719 100755
  
  static void
  raop_handler_setup(raop_conn_t *conn,
-@@ -270,25 +269,40 @@ raop_handler_setup(raop_conn_t *conn,
+@@ -269,26 +299,42 @@ raop_handler_setup(raop_conn_t *conn,
+     // 解析bplist
      plist_t root_node = NULL;
      plist_from_bin(data, datalen, &root_node);
++    log_request_plist(conn, "SETUP", root_node);
      plist_t streams_note = plist_dict_get_item(root_node, "streams");
 -    if (setup == 0) {
 +    uint64_t stream_type = 0;
@@ -577,7 +619,7 @@ index fdad0d5..8064719 100755
          plist_t time_note = plist_dict_get_item(root_node, "timingPort");
          plist_get_uint_val(time_note, &timing_rport);
  		logger_log(conn->raop->logger, LOGGER_DEBUG, "timing_rport = %llu", timing_rport);
-@@ -297,11 +311,22 @@ raop_handler_setup(raop_conn_t *conn,
+@@ -297,11 +343,22 @@ raop_handler_setup(raop_conn_t *conn,
          logger_log(conn->raop->logger, LOGGER_DEBUG, "fairplay_decrypt ret = %d", ret);
  		unsigned char ecdh_secret[32];
          pairing_get_ecdh_secret_key(conn->pairing, ecdh_secret);
@@ -602,7 +644,7 @@ index fdad0d5..8064719 100755
          logger_log(conn->raop->logger, LOGGER_DEBUG, "SETUP 2");
  		plist_t stream_note = plist_array_get_item(streams_note, 0);
  		plist_t type_note = plist_dict_get_item(stream_note, "type");
-@@ -348,6 +373,11 @@ raop_handler_setup(raop_conn_t *conn,
+@@ -348,6 +405,11 @@ raop_handler_setup(raop_conn_t *conn,
          logger_log(conn->raop->logger, LOGGER_DEBUG, "SETUP 3");
          unsigned short cport = 0, tport = 0, dport = 0;
  
@@ -614,6 +656,23 @@ index fdad0d5..8064719 100755
          if (conn->raop_rtp) {
              raop_rtp_start_audio(conn->raop_rtp, use_udp, remote_cport, remote_tport, &cport, &tport, &dport);
              logger_log(conn->raop->logger, LOGGER_DEBUG, "RAOP initialized success");
+@@ -499,6 +561,16 @@ raop_handler_feedback(raop_conn_t *conn,
+                            char **response_data, int *response_datalen)
+ {
+     logger_log(conn->raop->logger, LOGGER_DEBUG, "raop_handler_feedback");
++    {
++        int fb_len = 0;
++        const char *fb_data = http_request_get_data(request, &fb_len);
++        if (fb_data && fb_len > 0) {
++            plist_t fb_root = NULL;
++            plist_from_bin(fb_data, fb_len, &fb_root);
++            log_request_plist(conn, "feedback", fb_root);
++            if (fb_root) plist_free(fb_root);
++        }
++    }
+ }
+ 
+ static void
 diff --git a/app/src/main/cpp/lib/raop_rtp.c b/app/src/main/cpp/lib/raop_rtp.c
 index 46f9390..7e76ef7 100755
 --- a/app/src/main/cpp/lib/raop_rtp.c
@@ -1221,7 +1280,7 @@ index d874e47..7941c1e 100755
          txtRecord.set("md", "0,1,2");
          txtRecord.set("rhd", "5.6.0.0");
 diff --git a/app/src/main/java/com/fang/myapplication/MainActivity.java b/app/src/main/java/com/fang/myapplication/MainActivity.java
-index 9c93d12..e6feeca 100755
+index 9c93d12..62a990b 100755
 --- a/app/src/main/java/com/fang/myapplication/MainActivity.java
 +++ b/app/src/main/java/com/fang/myapplication/MainActivity.java
 @@ -2,6 +2,7 @@ package com.fang.myapplication;
@@ -1240,16 +1299,29 @@ index 9c93d12..e6feeca 100755
      private RaopServer mRaopServer;
      private DNSNotify mDNSNotify;
  
-@@ -22,6 +22,8 @@ public class MainActivity extends Activity implements View.OnClickListener {
+@@ -22,61 +22,129 @@ public class MainActivity extends Activity implements View.OnClickListener {
      private Button mBtnControl;
      private TextView mTxtDevice;
      private boolean mIsStart = false;
 +    private View mIdleView;
 +    private volatile boolean mResumed = false;
++    private android.net.wifi.WifiManager.WifiLock mWifiLock;
  
      @Override
      protected void onCreate(Bundle savedInstanceState) {
-@@ -32,51 +34,104 @@ public class MainActivity extends Activity implements View.OnClickListener {
+         super.onCreate(savedInstanceState);
+         setContentView(R.layout.activity_main);
+         getSystemService(Context.NSD_SERVICE);
++        // The radio stays at full performance while the receiver runs: with power saving on, a stream's packets
++        // wait for the next beacon and the sender reads the delay as a poor link and lowers its bitrate.
++        android.net.wifi.WifiManager wifi =
++                (android.net.wifi.WifiManager) getApplicationContext().getSystemService(Context.WIFI_SERVICE);
++        if (wifi != null) {
++            mWifiLock = wifi.createWifiLock(android.net.wifi.WifiManager.WIFI_MODE_FULL_HIGH_PERF, "airplay-receiver");
++            mWifiLock.setReferenceCounted(false);
++            mWifiLock.acquire();
++        }
+         mBtnControl = findViewById(R.id.btn_control);
          mTxtDevice = findViewById(R.id.txt_device);
          mBtnControl.setOnClickListener(this);
          mSurfaceView = findViewById(R.id.surface);
@@ -1316,6 +1388,9 @@ index 9c93d12..e6feeca 100755
 +        }
 +        // The player threads hold the decoder and the audio track; without this a second launch could not get them.
 +        mRaopServer.release();
++        if (mWifiLock != null && mWifiLock.isHeld()) {
++            mWifiLock.release();
++        }
 +        super.onDestroy();
      }
  

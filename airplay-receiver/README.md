@@ -36,6 +36,16 @@ Screen Mirroring, **Fire Stick**. Play something with sound.
 If "Fire Stick" stops appearing in the iPhone's list after the TV has been idle for a long time, close the app and
 open it again: its network registration can silently drop.
 
+## Picture quality
+
+The receiver shows exactly what the Mac or iPhone sends, at 1920x1080 and 30 frames per second at most. How good that
+is, is the sender's choice: mirroring encodes the screen live in a low-latency mode (the Mac asks for 100 ms) at a
+few Mbps, so a desktop stays sharp while a fast-moving video looks soft and blocky, on this receiver as on any other.
+An upright iPhone sends a 498x1080 strip, because a 1080-pixel-tall TV cannot show it larger. To get better video, give
+the stick a strong, clean Wi-Fi path (the sender lowers its bitrate when the path to the receiver is slow or lossy),
+ideally a strong 5 GHz signal or a cable, or play the video on the stick itself instead of mirroring. 5 GHz only helps
+if the signal is strong where the TV is: on the test stick it arrived at -73 dBm and was worse than 2.4 GHz at -57 dBm.
+
 ## What the patch changes
 
 The 2019 code worked once, for the first phone that connected, and then not again. The patch:
