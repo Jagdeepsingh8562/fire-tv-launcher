@@ -1,0 +1,2 @@
+# the patch has Windows line endings inside it (the upstream files do): git must not touch them
+*.patch -text

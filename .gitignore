@@ -27,3 +27,6 @@ screenshots/
 
 # Trademarked art and sounds for the PS5 home, copied in locally (see README, "PS5 home")
 launcher/app/src/main/assets/ps5/
+
+# AirPlay receiver: the upstream clone and APK that airplay-receiver/build.sh makes
+airplay-receiver/build/

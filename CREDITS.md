@@ -26,6 +26,15 @@ repo: the README shows how to build it from its source, changing `minSdk` from 2
 ours to its clear (`tools/pipes-tv-clear-fix.patch`, for GPUs with 16-bit pixel shaders). It is not affiliated
 with or endorsed by Microsoft, and its README says it contains no Microsoft code, images or sounds.
 
+## AirPlay receiver
+
+[KqSMea8/AirplayServer](https://github.com/KqSMea8/AirplayServer) (2019) is the receiver behind `airplay-receiver/`.
+It has no licence file, so it is not in this repo: `airplay-receiver/build.sh` clones it at the commit our patch
+(`airplay-receiver/airplay-receiver.patch`) was made against. It carries code from other projects (RPiPlay-style
+AirPlay handling, Apple's mDNSResponder, Fraunhofer's FDK AAC and others) under their own licences. The patch is
+ours, a derivative of that code, and is shared only as a patch. Not affiliated with or endorsed by Apple; "AirPlay"
+is Apple's trademark.
+
 ## Logos
 
 The dock icons for YouTube, Netflix, Prime Video and AirPlay are trademarks of their owners and are not in

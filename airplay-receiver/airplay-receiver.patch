@@ -1,0 +1,1918 @@
+diff --git a/app/build.gradle b/app/build.gradle
+index a32b716..52df79c 100755
+--- a/app/build.gradle
++++ b/app/build.gradle
+@@ -1,47 +1,31 @@
+-apply plugin: 'com.android.application'
++plugins { id 'com.android.application' }
+ 
+ android {
+-    compileSdkVersion 27
++    namespace 'com.fang.myapplication'
++    compileSdk 34
++    ndkVersion '27.0.12077973'
+     defaultConfig {
+         applicationId "com.fang.myapplication"
+-        minSdkVersion 22
+-        targetSdkVersion 27
++        minSdk 22
++        // 22: the stick has no runtime permissions, so everything declared is granted at install
++        targetSdk 22
+         versionCode 1
+         versionName "1.0"
+-        testInstrumentationRunner "android.support.test.runner.AndroidJUnitRunner"
+         externalNativeBuild {
+-            cmake {
+-                abiFilters "armeabi-v7a"
+-                cppFlags ""
+-            }
+-        }
+-        ndk {
+-            abiFilters "armeabi-v7a"
+-        }
+-    }
+-    buildTypes {
+-        release {
+-            minifyEnabled false
+-            proguardFiles getDefaultProguardFile('proguard-android.txt'), 'proguard-rules.pro'
++            cmake { abiFilters "armeabi-v7a"; cppFlags ""; cFlags "-include string.h -include stdlib.h" }
+         }
++        ndk { abiFilters "armeabi-v7a" }
+     }
+     externalNativeBuild {
+-        cmake {
+-            path "CMakeLists.txt"
+-        }
++        cmake { path "CMakeLists.txt"; version "3.22.1" }
+     }
+-    sourceSets {
+-        main {
+-            jni.srcDirs = []
+-            jniLibs.srcDirs = ['libs']
++    // the 2019 sources and targetSdk 22 trip release lint (ExpiredTargetSdkVersion); this is a sideloaded build
++    lint { checkReleaseBuilds false }
++    buildTypes {
++        release {
++            // optimised native code (the debug build runs unoptimised, far too slow for video);
++            // debug-signed so it installs on the stick without a release key
++            signingConfig signingConfigs.debug
+         }
+     }
+-
+-}
+-
+-dependencies {
+-    implementation fileTree(dir: 'libs', include: ['*.jar'])
+-    testImplementation 'junit:junit:4.12'
+-    androidTestImplementation 'com.android.support.test:runner:1.0.2'
+-    androidTestImplementation 'com.android.support.test.espresso:espresso-core:3.0.2'
+ }
+diff --git a/app/src/main/AndroidManifest.xml b/app/src/main/AndroidManifest.xml
+index 5f59d84..6a9f827 100755
+--- a/app/src/main/AndroidManifest.xml
++++ b/app/src/main/AndroidManifest.xml
+@@ -1,13 +1,12 @@
+ <?xml version="1.0" encoding="utf-8"?>
+ <manifest xmlns:android="http://schemas.android.com/apk/res/android"
+-    package="com.fang.myapplication">
++   >
+ 
+-    <uses-permission android:name="android.permission.WRITE_EXTERNAL_STORAGE"/>
+-    <uses-permission android:name="android.permission.READ_EXTERNAL_STORAGE"/>
+-    <uses-permission android:name="android.permission.READ_PHONE_STATE"/>
+     <uses-permission android:name="android.permission.ACCESS_WIFI_STATE" />
+     <uses-permission android:name="android.permission.INTERNET"/>
+-    <uses-permission android:name="android.permission.RECORD_AUDIO"/>
++
++    <uses-feature android:name="android.software.leanback" android:required="false" />
++    <uses-feature android:name="android.hardware.touchscreen" android:required="false" />
+ 
+     <application
+         android:allowBackup="true"
+@@ -16,11 +15,14 @@
+         android:roundIcon="@mipmap/ic_launcher_round"
+         android:supportsRtl="true"
+         android:theme="@style/AppTheme">
+-        <activity android:name=".MainActivity">
++        <activity android:name=".MainActivity"
++            android:screenOrientation="landscape"
++            android:launchMode="singleTask">
+             <intent-filter>
+                 <action android:name="android.intent.action.MAIN" />
+ 
+                 <category android:name="android.intent.category.LAUNCHER" />
++                <category android:name="android.intent.category.LEANBACK_LAUNCHER" />
+             </intent-filter>
+         </activity>
+     </application>
+diff --git a/app/src/main/cpp/jni_raop_server.cpp b/app/src/main/cpp/jni_raop_server.cpp
+index 9aba07a..dd6874d 100755
+--- a/app/src/main/cpp/jni_raop_server.cpp
++++ b/app/src/main/cpp/jni_raop_server.cpp
+@@ -10,39 +10,59 @@
+ #include "lib/logger.h"
+ #include <malloc.h>
+ #include <cstring>
++#include <pthread.h>
+ 
+ static JavaVM* g_JavaVM;
++static jmethodID g_audioMethod = NULL;
++static jmethodID g_videoMethod = NULL;
++static jmethodID g_endMethod = NULL;
++static pthread_key_t g_detachKey;
++
++static void detach_thread(void *) {
++    g_JavaVM->DetachCurrentThread();
++}
++
++/* The decoder threads call in for every frame: attach each one once, and detach when it ends. */
++static JNIEnv* env_for_this_thread() {
++    JNIEnv* env = NULL;
++    if (g_JavaVM->GetEnv((void **) &env, JNI_VERSION_1_6) == JNI_OK) return env;
++    if (g_JavaVM->AttachCurrentThread(&env, NULL) != JNI_OK) return NULL;
++    pthread_setspecific(g_detachKey, env);
++    return env;
++}
++
++/* A Java exception left pending on a native thread aborts the next JNI call (and the app with it): clear it. */
++static void clear_pending_exception(JNIEnv* env) {
++    if (env->ExceptionCheck()) {
++        env->ExceptionDescribe();
++        env->ExceptionClear();
++    }
++}
+ 
+ void OnRecvAudioData(void *observer, pcm_data_struct *data) {
+     jobject obj = (jobject) observer;
+-    JNIEnv* jniEnv = NULL;
+-    g_JavaVM->AttachCurrentThread(&jniEnv, NULL);
+-    jclass cls = jniEnv->GetObjectClass(obj);
+-    jmethodID onRecvVideoDataM = jniEnv->GetMethodID(cls, "onRecvAudioData", "([SJ)V");
+-    jniEnv->DeleteLocalRef(cls);
++    JNIEnv* jniEnv = env_for_this_thread();
++    if (jniEnv == NULL || g_audioMethod == NULL) return;
+     jshortArray sarr = jniEnv->NewShortArray(data->data_len);
+     if (sarr == NULL) return;
+     jniEnv->SetShortArrayRegion(sarr, (jint) 0, data->data_len, (jshort *) data->data);
+-    jniEnv->CallVoidMethod(obj, onRecvVideoDataM, sarr, data->pts);
++    jniEnv->CallVoidMethod(obj, g_audioMethod, sarr, data->pts);
++    clear_pending_exception(jniEnv);
+     jniEnv->DeleteLocalRef(sarr);
+-    g_JavaVM->DetachCurrentThread();
+ }
+ 
+ 
+ void OnRecvVideoData(void *observer, h264_decode_struct *data) {
+     jobject obj = (jobject) observer;
+-    JNIEnv* jniEnv = NULL;
+-    g_JavaVM->AttachCurrentThread(&jniEnv, NULL);
+-    jclass cls = jniEnv->GetObjectClass(obj);
+-    jmethodID onRecvVideoDataM = jniEnv->GetMethodID(cls, "onRecvVideoData", "([BIJJ)V");
+-    jniEnv->DeleteLocalRef(cls);
++    JNIEnv* jniEnv = env_for_this_thread();
++    if (jniEnv == NULL || g_videoMethod == NULL) return;
+     jbyteArray barr = jniEnv->NewByteArray(data->data_len);
+     if (barr == NULL) return;
+     jniEnv->SetByteArrayRegion(barr, (jint) 0, data->data_len, (jbyte *) data->data);
+-    jniEnv->CallVoidMethod(obj, onRecvVideoDataM, barr, data->frame_type,
++    jniEnv->CallVoidMethod(obj, g_videoMethod, barr, data->frame_type,
+                                          data->pts, data->pts);
++    clear_pending_exception(jniEnv);
+     jniEnv->DeleteLocalRef(barr);
+-    g_JavaVM->DetachCurrentThread();
+ }
+ 
+ extern "C" void
+@@ -63,6 +83,15 @@ video_process(void *cls, h264_decode_struct *data)
+     OnRecvVideoData(cls, data);
+ }
+ 
++extern "C" void
++video_end(void *cls)
++{
++    JNIEnv* jniEnv = env_for_this_thread();
++    if (jniEnv == NULL || g_endMethod == NULL) return;
++    jniEnv->CallVoidMethod((jobject) cls, g_endMethod);
++    clear_pending_exception(jniEnv);
++}
++
+ extern "C" void
+ log_callback(void *cls, int level, const char *msg) {
+     switch (level) {
+@@ -90,6 +119,7 @@ log_callback(void *cls, int level, const char *msg) {
+ extern "C" JNIEXPORT jint JNICALL
+ JNI_OnLoad(JavaVM* vm, void* reserved) {
+     g_JavaVM = vm;
++    pthread_key_create(&g_detachKey, detach_thread);
+     return JNI_VERSION_1_6;
+ }
+ 
+@@ -98,10 +128,16 @@ Java_com_fang_myapplication_RaopServer_start(JNIEnv* env, jobject object) {
+     raop_t *raop;
+     raop_callbacks_t raop_cbs;
+     memset(&raop_cbs, 0, sizeof(raop_cbs));
+-    raop_cbs.cls = (void *) env->NewGlobalRef(object);;
++    jclass cls = env->GetObjectClass(object);
++    g_audioMethod = env->GetMethodID(cls, "onRecvAudioData", "([SJ)V");
++    g_videoMethod = env->GetMethodID(cls, "onRecvVideoData", "([BIJJ)V");
++    g_endMethod = env->GetMethodID(cls, "onVideoEnded", "()V");
++    env->DeleteLocalRef(cls);
++    raop_cbs.cls = (void *) env->NewGlobalRef(object);
+     raop_cbs.audio_process = audio_process;
+     raop_cbs.audio_set_volume = audio_set_volume;
+     raop_cbs.video_process = video_process;
++    raop_cbs.video_end = video_end;
+     raop = raop_init(10, &raop_cbs);
+     if (raop == NULL) {
+         LOGE("raop = NULL");
+@@ -111,7 +147,7 @@ Java_com_fang_myapplication_RaopServer_start(JNIEnv* env, jobject object) {
+     }
+ 
+     raop_set_log_callback(raop, log_callback, NULL);
+-    raop_set_log_level(raop, RAOP_LOG_DEBUG);
++    raop_set_log_level(raop, RAOP_LOG_INFO);
+ 
+     unsigned short port = 0;
+     raop_start(raop, &port);
+diff --git a/app/src/main/cpp/lib/httpd.c b/app/src/main/cpp/lib/httpd.c
+index fce9df7..74ffcb8 100755
+--- a/app/src/main/cpp/lib/httpd.c
++++ b/app/src/main/cpp/lib/httpd.c
+@@ -16,6 +16,12 @@
+ #include <string.h>
+ #include <stdio.h>
+ #include <assert.h>
++#include <errno.h>
++#ifndef WIN32
++#include <netinet/in.h>
++#include <netinet/tcp.h>
++#include <sys/socket.h>
++#endif
+ 
+ #include "httpd.h"
+ #include "netutils.h"
+@@ -23,6 +29,8 @@
+ #include "compat.h"
+ #include "logger.h"
+ 
++static void httpd_set_keepalive(int fd);
++
+ struct http_connection_s {
+ 	int connected;
+ 
+@@ -155,6 +163,7 @@ httpd_accept_connection(httpd_t *httpd, int server_fd, int is_ipv6)
+ 
+ 	logger_log(httpd->logger, LOGGER_INFO, "Accepted %s client on socket %d",
+ 	           (is_ipv6 ? "IPv6"  : "IPv4"), fd);
++	httpd_set_keepalive(fd);
+ 	local = netutils_get_address(&local_saddr, &local_len);
+ 	remote = netutils_get_address(&remote_saddr, &remote_len);
+ 
+@@ -167,6 +176,20 @@ httpd_accept_connection(httpd_t *httpd, int server_fd, int is_ipv6)
+ 	return 1;
+ }
+ 
++/* A phone that vanishes (Wi-Fi off, app killed, device asleep) never closes its connection. Ask the kernel to
++ * probe an idle one: after about 5 + 3 x 3 seconds of silence the next read fails and the connection is freed. */
++static void
++httpd_set_keepalive(int fd)
++{
++#ifndef WIN32
++	int on = 1, idle = 5, interval = 3, count = 3;
++	setsockopt(fd, SOL_SOCKET, SO_KEEPALIVE, (const char *)&on, sizeof(on));
++	setsockopt(fd, IPPROTO_TCP, TCP_KEEPIDLE, (const char *)&idle, sizeof(idle));
++	setsockopt(fd, IPPROTO_TCP, TCP_KEEPINTVL, (const char *)&interval, sizeof(interval));
++	setsockopt(fd, IPPROTO_TCP, TCP_KEEPCNT, (const char *)&count, sizeof(count));
++#endif
++}
++
+ static void
+ httpd_remove_connection(httpd_t *httpd, http_connection_t *connection)
+ {
+@@ -240,8 +263,11 @@ httpd_thread(void *arg)
+ 			/* Timeout happened */
+ 			continue;
+ 		} else if (ret == -1) {
+-			/* FIXME: Error happened */
+-			logger_log(httpd->logger, LOGGER_INFO, "Error in select");
++			if (errno == EINTR) {
++				/* a signal interrupted the wait: not an error. Ending here would stop the whole server. */
++				continue;
++			}
++			logger_log(httpd->logger, LOGGER_INFO, "Error in select: %s", strerror(errno));
+ 			break;
+ 		}
+ 
+@@ -281,6 +307,16 @@ httpd_thread(void *arg)
+ 
+ 			logger_log(httpd->logger, LOGGER_DEBUG, "Receiving on socket %d", connection->socket_fd);
+ 			ret = recv(connection->socket_fd, buffer, sizeof(buffer), 0);
++			if (ret < 0) {
++				if (errno == EINTR || errno == EAGAIN || errno == EWOULDBLOCK) {
++					continue;
++				}
++				/* A reset or a keepalive timeout: the phone is gone. This used to be parsed as -1 bytes of request. */
++				logger_log(httpd->logger, LOGGER_INFO, "Connection error on socket %d: %s",
++				           connection->socket_fd, strerror(errno));
++				httpd_remove_connection(httpd, connection);
++				continue;
++			}
+ 			if (ret == 0) {
+ 				logger_log(httpd->logger, LOGGER_INFO, "Connection closed for socket %d", connection->socket_fd);
+ 				httpd_remove_connection(httpd, connection);
+diff --git a/app/src/main/cpp/lib/raop.c b/app/src/main/cpp/lib/raop.c
+index a6387b0..79f4ba8 100755
+--- a/app/src/main/cpp/lib/raop.c
++++ b/app/src/main/cpp/lib/raop.c
+@@ -52,6 +52,13 @@ struct raop_conn_s {
+ 	fairplay_t *fairplay;
+ 	pairing_session_t *pairing;
+ 
++	/* Kept from the first SETUP (mirror info): a stream torn down and set up again needs them. */
++	int have_keys;
++	unsigned char aeskey[16];
++	unsigned char aesiv[16];
++	unsigned char ecdh_secret[32];
++	unsigned long long timing_rport;
++
+ 	unsigned char *local;
+ 	int locallen;
+ 
+@@ -61,6 +68,23 @@ struct raop_conn_s {
+ };
+ typedef struct raop_conn_s raop_conn_t;
+ 
++/* Only one mirroring session is shown. The connection that last set one up owns it; when a phone connects again
++ * while an older connection is still open (it died without closing), the older one's streams are stopped. */
++static raop_conn_t *g_active_conn = NULL;
++
++static void
++conn_stop_streams(raop_conn_t *conn)
++{
++	if (conn->raop_rtp) {
++		raop_rtp_destroy(conn->raop_rtp);
++		conn->raop_rtp = NULL;
++	}
++	if (conn->raop_rtp_mirror) {
++		raop_rtp_mirror_destroy(conn->raop_rtp_mirror);
++		conn->raop_rtp_mirror = NULL;
++	}
++}
++
+ #include "raop_handlers.h"
+ 
+ static void *
+@@ -141,6 +165,17 @@ conn_request(void *ptr, http_request_t *request, http_response_t **response)
+ 	url = http_request_get_url(request);
+ 	cseq = http_request_get_header(request, "CSeq");
+ 	if (!method || !cseq) {
++		/* AirPlay video casting (/play, /reverse, ...) arrives as plain HTTP without CSeq. It used to be
++		 * dropped without any answer, so the phone waited for ever: say it is not supported. */
++		logger_log(conn->raop->logger, LOGGER_INFO, "Unsupported request without CSeq: %s %s",
++		           method ? method : "?", url ? url : "?");
++		if (method) {
++			*response = http_response_init("HTTP/1.1", 501, "Not Implemented");
++			/* http_response_finish only writes a length when there is a body, and an HTTP client
++			 * without one waits for the connection to close. */
++			http_response_add_header(*response, "Content-Length", "0");
++			http_response_finish(*response, NULL, 0);
++		}
+ 		return;
+ 	}
+ 
+@@ -150,7 +185,7 @@ conn_request(void *ptr, http_request_t *request, http_response_t **response)
+ 	//http_response_add_header(*response, "Apple-Jack-Status", "connected; type=analog");
+ 	http_response_add_header(*response, "Server", "AirTunes/220.68");
+ 
+-	logger_log(conn->raop->logger, LOGGER_DEBUG, "Handling request %s with URL %s", method, url);
++	logger_log(conn->raop->logger, LOGGER_INFO, "Handling request %s with URL %s", method, url);
+ 	raop_handler_t handler = NULL;
+ 	if (!strcmp(method, "GET") && !strcmp(url, "/info")) {
+ 		handler = &raop_handler_info;
+@@ -189,17 +224,40 @@ conn_request(void *ptr, http_request_t *request, http_response_t **response)
+ 			logger_log(conn->raop->logger, LOGGER_WARNING, "RAOP not initialized at FLUSH");
+ 		}
+ 	} else if (!strcmp(method, "TEARDOWN")) {
+-		http_response_add_header(*response, "Connection", "close");
+-		if (conn->raop_rtp) {
+-			/* Destroy our RTP session */
+-			raop_rtp_destroy(conn->raop_rtp);
+-			conn->raop_rtp = NULL;
++		/* The phone names the stream it ends: 96 is the audio, 110 the screen. The old code ended
++		 * everything on any TEARDOWN, so pausing the sound also killed the picture. */
++		unsigned long long stream_type = 0;
++		int td_len = 0;
++		const char *td_data = http_request_get_data(request, &td_len);
++		if (td_data && td_len > 0) {
++			plist_t td_root = NULL;
++			plist_from_bin(td_data, td_len, &td_root);
++			plist_t td_streams = td_root ? plist_dict_get_item(td_root, "streams") : NULL;
++			plist_t td_stream = td_streams ? plist_array_get_item(td_streams, 0) : NULL;
++			plist_t td_type = td_stream ? plist_dict_get_item(td_stream, "type") : NULL;
++			if (td_type) {
++				uint64_t type_value = 0;
++				plist_get_uint_val(td_type, &type_value);
++				stream_type = type_value;
++			}
++			if (td_root) plist_free(td_root);
++		}
++		logger_log(conn->raop->logger, LOGGER_INFO, "TEARDOWN of stream type %llu", stream_type);
++		if (stream_type != 96) {
++			if (conn->raop_rtp_mirror) {
++				raop_rtp_mirror_destroy(conn->raop_rtp_mirror);
++				conn->raop_rtp_mirror = NULL;
++			}
++		}
++		if (stream_type != 110) {
++			if (conn->raop_rtp) {
++				raop_rtp_destroy(conn->raop_rtp);
++				conn->raop_rtp = NULL;
++			}
++		}
++		if (stream_type == 0) {
++			http_response_add_header(*response, "Connection", "close");
+ 		}
+-        if (conn->raop_rtp_mirror) {
+-            /* Destroy our mirror session */
+-            raop_rtp_mirror_destroy(conn->raop_rtp_mirror);
+-            conn->raop_rtp_mirror = NULL;
+-        }
+ 	}
+ 	if (handler != NULL) {
+ 		handler(conn, request, *response, &response_data, &response_datalen);
+@@ -217,6 +275,9 @@ conn_destroy(void *ptr)
+ {
+ 	raop_conn_t *conn = ptr;
+ 
++	if (g_active_conn == conn) {
++		g_active_conn = NULL;
++	}
+ 	if (conn->raop_rtp) {
+ 		/* This is done in case TEARDOWN was not called */
+ 		raop_rtp_destroy(conn->raop_rtp);
+diff --git a/app/src/main/cpp/lib/raop.h b/app/src/main/cpp/lib/raop.h
+index 566bbd5..a385e88 100755
+--- a/app/src/main/cpp/lib/raop.h
++++ b/app/src/main/cpp/lib/raop.h
+@@ -33,6 +33,8 @@ struct raop_callbacks_s {
+ 
+ 	void  (*audio_process)(void *cls, pcm_data_struct *data);
+     void  (*video_process)(void *cls, h264_decode_struct *data);
++    /* The mirror stream ended: the phone stopped it, the connection died or it was replaced. Optional. */
++    void  (*video_end)(void *cls);
+ 
+ 	/* Optional but recommended callback functions */
+ 	void  (*audio_flush)(void *cls, void *session);
+diff --git a/app/src/main/cpp/lib/raop_handlers.h b/app/src/main/cpp/lib/raop_handlers.h
+index fdad0d5..8064719 100755
+--- a/app/src/main/cpp/lib/raop_handlers.h
++++ b/app/src/main/cpp/lib/raop_handlers.h
+@@ -53,7 +53,7 @@ raop_handler_info(raop_conn_t *conn,
+ 			,0x65,0x54,0xe7,0x5a,0x6d,0x61,0x63,0x41,0x64,0x64,0x72,0x65,0x73,0x73,0x10,0x02
+ 			,0xa1,0x2c,0x10,0x04,0xa2,0x13,0x19,0x5c,0x61,0x75,0x64,0x69,0x6f,0x46,0x6f,0x72
+ 			,0x6d,0x61,0x74,0x73,0x54,0x6e,0x61,0x6d,0x65,0x08,0x52,0x76,0x76,0x13,0x00,0x00
+-			,0x00,0x1e,0x5a,0x7f,0xff,0xf7,0x5f,0x10,0x12,0x69,0x6e,0x70,0x75,0x74,0x4c,0x61
++			,0x00,0x1e,0x5a,0x7f,0xff,0xe6,0x5f,0x10,0x12,0x69,0x6e,0x70,0x75,0x74,0x4c,0x61
+ 			,0x74,0x65,0x6e,0x63,0x79,0x4d,0x69,0x63,0x72,0x6f,0x73,0x5b,0x73,0x74,0x61,0x74
+ 			,0x75,0x73,0x46,0x6c,0x61,0x67,0x73,0x57,0x41,0x70,0x70,0x6c,0x65,0x54,0x56,0xd4
+ 			,0x1e,0x20,0x22,0x16,0x1f,0x21,0x21,0x17,0x57,0x64,0x65,0x66,0x61,0x75,0x6c,0x74
+@@ -225,7 +225,6 @@ raop_handler_options(raop_conn_t *conn,
+ 	http_response_add_header(response, "Public", "SETUP, RECORD, PAUSE, FLUSH, TEARDOWN, OPTIONS, GET_PARAMETER, SET_PARAMETER");
+ }
+ 
+-static int setup = 0;
+ 
+ static void
+ raop_handler_setup(raop_conn_t *conn,
+@@ -270,25 +269,40 @@ raop_handler_setup(raop_conn_t *conn,
+     plist_t root_node = NULL;
+     plist_from_bin(data, datalen, &root_node);
+     plist_t streams_note = plist_dict_get_item(root_node, "streams");
+-    if (setup == 0) {
++    uint64_t stream_type = 0;
++    if (streams_note) {
++        plist_t first_stream = plist_array_get_item(streams_note, 0);
++        plist_t first_type = first_stream ? plist_dict_get_item(first_stream, "type") : NULL;
++        if (first_type) plist_get_uint_val(first_type, &stream_type);
++    }
++    if (plist_dict_get_item(root_node, "ekey") != NULL) {
+ 		unsigned char aesiv[16];
+ 		unsigned char aeskey[16];
+-        setup++;
+         logger_log(conn->raop->logger, LOGGER_DEBUG, "SETUP 1");
+         // 第一次setup
+         plist_t eiv_note = plist_dict_get_item(root_node, "eiv");
+         char* eiv= NULL;
+         uint64_t eiv_len = 0;
+         plist_get_data_val(eiv_note, &eiv, &eiv_len);
++        if (!eiv || eiv_len < 16) {
++            logger_log(conn->raop->logger, LOGGER_ERR, "SETUP without a usable eiv: closing the connection");
++            http_response_set_disconnect(response, 1);
++            return;
++        }
+         memcpy(aesiv, eiv, 16);
+         logger_log(conn->raop->logger, LOGGER_DEBUG, "eiv_len = %llu", eiv_len);
+         plist_t ekey_note = plist_dict_get_item(root_node, "ekey");
+         char* ekey= NULL;
+         uint64_t ekey_len = 0;
+         plist_get_data_val(ekey_note, &ekey, &ekey_len);
++        if (!ekey || ekey_len < 72) {
++            logger_log(conn->raop->logger, LOGGER_ERR, "SETUP without a usable ekey: closing the connection");
++            http_response_set_disconnect(response, 1);
++            return;
++        }
+         logger_log(conn->raop->logger, LOGGER_DEBUG, "ekey_len = %llu", ekey_len);
+         // 时间port
+-		uint64_t timing_rport;
++		uint64_t timing_rport = 0;
+         plist_t time_note = plist_dict_get_item(root_node, "timingPort");
+         plist_get_uint_val(time_note, &timing_rport);
+ 		logger_log(conn->raop->logger, LOGGER_DEBUG, "timing_rport = %llu", timing_rport);
+@@ -297,11 +311,22 @@ raop_handler_setup(raop_conn_t *conn,
+         logger_log(conn->raop->logger, LOGGER_DEBUG, "fairplay_decrypt ret = %d", ret);
+ 		unsigned char ecdh_secret[32];
+         pairing_get_ecdh_secret_key(conn->pairing, ecdh_secret);
++        /* a new mirroring session replaces whatever was still open, here or on a connection that died */
++        if (g_active_conn && g_active_conn != conn) {
++            logger_log(conn->raop->logger, LOGGER_INFO, "A new session replaces the one still open");
++            conn_stop_streams(g_active_conn);
++        }
++        conn_stop_streams(conn);
++        g_active_conn = conn;
++        memcpy(conn->aeskey, aeskey, 16);
++        memcpy(conn->aesiv, aesiv, 16);
++        memcpy(conn->ecdh_secret, ecdh_secret, 32);
++        conn->timing_rport = timing_rport;
++        conn->have_keys = 1;
+         conn->raop_rtp = raop_rtp_init(conn->raop->logger, &conn->raop->callbacks, conn->remote, conn->remotelen, aeskey, aesiv, ecdh_secret, timing_rport);
+ 		conn->raop_rtp_mirror = raop_rtp_mirror_init(conn->raop->logger, &conn->raop->callbacks, conn->remote, conn->remotelen, aeskey, ecdh_secret, timing_rport);
+-    } else if (setup == 1) {
++    } else if (stream_type == 110) {
+ 		unsigned short tport=0, dport=0;
+-        setup++;
+         logger_log(conn->raop->logger, LOGGER_DEBUG, "SETUP 2");
+ 		plist_t stream_note = plist_array_get_item(streams_note, 0);
+ 		plist_t type_note = plist_dict_get_item(stream_note, "type");
+@@ -348,6 +373,11 @@ raop_handler_setup(raop_conn_t *conn,
+         logger_log(conn->raop->logger, LOGGER_DEBUG, "SETUP 3");
+         unsigned short cport = 0, tport = 0, dport = 0;
+ 
++        if (!conn->raop_rtp && conn->have_keys) {
++            /* the audio was torn down and the phone sets it up again */
++            conn->raop_rtp = raop_rtp_init(conn->raop->logger, &conn->raop->callbacks, conn->remote, conn->remotelen,
++                                           conn->aeskey, conn->aesiv, conn->ecdh_secret, conn->timing_rport);
++        }
+         if (conn->raop_rtp) {
+             raop_rtp_start_audio(conn->raop_rtp, use_udp, remote_cport, remote_tport, &cport, &tport, &dport);
+             logger_log(conn->raop->logger, LOGGER_DEBUG, "RAOP initialized success");
+diff --git a/app/src/main/cpp/lib/raop_rtp.c b/app/src/main/cpp/lib/raop_rtp.c
+index 46f9390..5691757 100755
+--- a/app/src/main/cpp/lib/raop_rtp.c
++++ b/app/src/main/cpp/lib/raop_rtp.c
+@@ -463,7 +463,10 @@ raop_rtp_thread_udp(void *arg)
+             /* Timeout happened */
+             continue;
+         } else if (ret == -1) {
+-            /* FIXME: Error happened */
++            if (errno == EINTR) {
++                continue; /* a signal interrupted the wait: not an error */
++            }
++            logger_log(raop_rtp->logger, LOGGER_INFO, "Error in select (audio): %s", strerror(errno));
+             break;
+         }
+ 
+diff --git a/app/src/main/cpp/lib/raop_rtp_mirror.c b/app/src/main/cpp/lib/raop_rtp_mirror.c
+index 792b1bd..8a3e707 100755
+--- a/app/src/main/cpp/lib/raop_rtp_mirror.c
++++ b/app/src/main/cpp/lib/raop_rtp_mirror.c
+@@ -9,6 +9,12 @@
+ #include <string.h>
+ #include <assert.h>
+ #include <errno.h>
++#ifndef WIN32
++#include <netinet/in.h>
++#include <netinet/tcp.h>
++#include <sys/socket.h>
++#include <sys/time.h>
++#endif
+ 
+ #include "raop.h"
+ #include "netutils.h"
+@@ -201,6 +207,77 @@ raop_rtp_mirror_thread_time(void *arg)
+ }
+ //#define DUMP_H264
+ 
++/* No frame is bigger than this; a larger size means the stream is out of step. */
++#define MIRROR_MAX_PAYLOAD (8 * 1024 * 1024)
++
++/* Reads exactly len bytes. Returns 0, or -1 when the phone closed the connection, the read failed or the session
++ * is being stopped. The old loops did `got += recv()` without looking at the result, so a connection that closed
++ * in the middle of a frame (recv() == 0) spun at full speed for ever, and stopping the session then waited for
++ * that thread, so the whole receiver hung. */
++static int
++mirror_recv_all(raop_rtp_mirror_t *mirror, int fd, unsigned char *buf, int len)
++{
++    int got = 0;
++    while (got < len) {
++        int r = recv(fd, (char *)buf + got, len - got, 0);
++        if (r > 0) {
++            got += r;
++            continue;
++        }
++        if (r == 0) {
++            return -1;
++        }
++        if (errno == EINTR) {
++            continue;
++        }
++        if (errno == EAGAIN || errno == EWOULDBLOCK) {
++            /* the receive timeout: keep waiting, unless the session is being stopped */
++            int running;
++            MUTEX_LOCK(mirror->run_mutex);
++            running = mirror->running;
++            MUTEX_UNLOCK(mirror->run_mutex);
++            if (!running) {
++                return -1;
++            }
++            continue;
++        }
++        return -1;
++    }
++    return 0;
++}
++
++/* Reads and throws away len bytes. */
++static int
++mirror_discard(raop_rtp_mirror_t *mirror, int fd, int len)
++{
++    unsigned char scratch[1024];
++    while (len > 0) {
++        int n = len < (int)sizeof(scratch) ? len : (int)sizeof(scratch);
++        if (mirror_recv_all(mirror, fd, scratch, n) < 0) {
++            return -1;
++        }
++        len -= n;
++    }
++    return 0;
++}
++
++/* Probe an idle connection (a phone that vanished) and never block for ever on a half-sent frame. */
++static void
++mirror_set_socket_options(int fd)
++{
++#ifndef WIN32
++    int on = 1, idle = 5, interval = 3, count = 3;
++    struct timeval timeout;
++    timeout.tv_sec = 5;
++    timeout.tv_usec = 0;
++    setsockopt(fd, SOL_SOCKET, SO_KEEPALIVE, (const char *)&on, sizeof(on));
++    setsockopt(fd, IPPROTO_TCP, TCP_KEEPIDLE, (const char *)&idle, sizeof(idle));
++    setsockopt(fd, IPPROTO_TCP, TCP_KEEPINTVL, (const char *)&interval, sizeof(interval));
++    setsockopt(fd, IPPROTO_TCP, TCP_KEEPCNT, (const char *)&count, sizeof(count));
++    setsockopt(fd, SOL_SOCKET, SO_RCVTIMEO, (const char *)&timeout, sizeof(timeout));
++#endif
++}
++
+ #define RAOP_PACKET_LEN 32768
+ /**
+  * 镜像
+@@ -253,8 +330,10 @@ raop_rtp_mirror_thread(void *arg)
+             /* Timeout happened */
+             continue;
+         } else if (ret == -1) {
+-            /* FIXME: Error happened */
+-            logger_log(raop_rtp_mirror->logger, LOGGER_INFO, "Error in select");
++            if (errno == EINTR) {
++                continue; /* a signal interrupted the wait: ending the stream here dropped a healthy session */
++            }
++            logger_log(raop_rtp_mirror->logger, LOGGER_INFO, "Error in select (video): %s", strerror(errno));
+             break;
+         }
+         if (stream_fd == -1 && FD_ISSET(raop_rtp_mirror->mirror_data_sock, &rfds)) {
+@@ -269,6 +348,7 @@ raop_rtp_mirror_thread(void *arg)
+                 logger_log(raop_rtp_mirror->logger, LOGGER_INFO, "Error in accept %d %s", errno, strerror(errno));
+                 break;
+             }
++            mirror_set_socket_options(stream_fd);
+         }
+         if (stream_fd != -1 && FD_ISSET(stream_fd, &rfds)) {
+             // packetlen初始0
+@@ -278,8 +358,10 @@ raop_rtp_mirror_thread(void *arg)
+                 logger_log(raop_rtp_mirror->logger, LOGGER_INFO, "TCP socket closed");
+                 break;
+             } else if (ret == -1) {
+-                /* FIXME: Error happened */
+-                logger_log(raop_rtp_mirror->logger, LOGGER_INFO, "Error in recv");
++                if (errno == EINTR || errno == EAGAIN || errno == EWOULDBLOCK) {
++                    continue;
++                }
++                logger_log(raop_rtp_mirror->logger, LOGGER_INFO, "Error in recv: %s", strerror(errno));
+                 break;
+             }
+             readstart += ret;
+@@ -291,15 +373,17 @@ raop_rtp_mirror_thread(void *arg)
+                 logger_log(raop_rtp_mirror->logger, LOGGER_DEBUG, "handle http data");
+             } else {
+                 // 普通数据块
+-                do {
+-                    // 读取剩下的124字节
+-                    ret = recv(stream_fd, packet + readstart, 128 - readstart, 0);
+-                    readstart = readstart + ret;
+-                } while (readstart < 128);
++                /* the other 124 bytes of the 128-byte header */
++                if (mirror_recv_all(raop_rtp_mirror, stream_fd, packet + readstart, 128 - readstart) < 0) {
++                    logger_log(raop_rtp_mirror->logger, LOGGER_INFO, "TCP socket closed inside a packet header");
++                    goto stream_ended;
++                }
+                 int payloadsize = byteutils_get_int(packet, 0);
+-                // FIXME: 这里计算方式需要再确认
+                 short payloadtype = (short) (byteutils_get_short(packet, 4) & 0xff);
+-                short payloadoption = byteutils_get_short(packet, 6);
++                if (payloadsize < 0 || payloadsize > MIRROR_MAX_PAYLOAD) {
++                    logger_log(raop_rtp_mirror->logger, LOGGER_INFO, "Bad packet size %d: ending the stream", payloadsize);
++                    goto stream_ended;
++                }
+ 
+                 // 处理内容数据
+                 if (payloadtype == 0) {
+@@ -311,143 +395,94 @@ raop_rtp_mirror_thread(void *arg)
+                         pts =  ntptopts(payloadntp) - pts_base;
+                     }
+                     // 这里是加密的数据
+-                    unsigned char* payload_in = malloc(payloadsize);
+-                    unsigned char* payload = malloc(payloadsize);
+-                    readstart = 0;
+-                    do {
+-                        // payload数据
+-                        ret = recv(stream_fd, payload_in + readstart, payloadsize - readstart, 0);
+-                        readstart = readstart + ret;
+-                    } while (readstart < payloadsize);
+-                    //logger_log(raop_rtp_mirror->logger, LOGGER_DEBUG, "readstart = %d", readstart);
+-#ifdef DUMP_H264
+-                    fwrite(payload_in, payloadsize, 1, file_source);
+-                    fwrite(&readstart, sizeof(readstart), 1, file_len);
+-#endif
++                    unsigned char* payload_in = malloc(payloadsize + 1);
++                    unsigned char* payload = malloc(payloadsize + 1);
++                    if (!payload_in || !payload || mirror_recv_all(raop_rtp_mirror, stream_fd, payload_in, payloadsize) < 0) {
++                        logger_log(raop_rtp_mirror->logger, LOGGER_INFO, "TCP socket closed inside a frame");
++                        free(payload_in);
++                        free(payload);
++                        goto stream_ended;
++                    }
+                     // 解密数据
+                     mirror_buffer_decrypt(raop_rtp_mirror->buffer, payload_in, payload, payloadsize);
++                    /* Each unit starts with its length, which becomes a start code. A bad length (the key out of
++                     * step after a restarted session) used to loop for ever or write past the buffer. */
+                     int nalu_size = 0;
+-                    int nalu_num = 0;
++                    int frame_ok = 1;
+                     while (nalu_size < payloadsize) {
++                        if (nalu_size + 4 > payloadsize) {
++                            frame_ok = 0;
++                            break;
++                        }
+                         int nc_len = (payload[nalu_size + 0] << 24) | (payload[nalu_size + 1] << 16) | (payload[nalu_size + 2] << 8) | (payload[nalu_size + 3]);
+-                        if (nc_len > 0) {
+-                            payload[nalu_size + 0] = 0;
+-                            payload[nalu_size + 1] = 0;
+-                            payload[nalu_size + 2] = 0;
+-                            payload[nalu_size + 3] = 1;
+-                            //int nalutype = payload[4] & 0x1f;
+-                            //logger_log(raop_rtp_mirror->logger, LOGGER_DEBUG, "nalutype = %d", nalutype);
+-                            nalu_size += nc_len + 4;
+-                            nalu_num++;
++                        if (nc_len <= 0 || nc_len > payloadsize - nalu_size - 4) {
++                            frame_ok = 0;
++                            break;
+                         }
++                        payload[nalu_size + 0] = 0;
++                        payload[nalu_size + 1] = 0;
++                        payload[nalu_size + 2] = 0;
++                        payload[nalu_size + 3] = 1;
++                        nalu_size += nc_len + 4;
++                    }
++                    if (frame_ok && payloadsize > 0) {
++                        h264_decode_struct h264_data;
++                        h264_data.data_len = payloadsize;
++                        h264_data.data = payload;
++                        h264_data.frame_type = 1;
++                        h264_data.pts = pts;
++                        raop_rtp_mirror->callbacks.video_process(raop_rtp_mirror->callbacks.cls, &h264_data);
++                    } else {
++                        logger_log(raop_rtp_mirror->logger, LOGGER_INFO, "Dropped a frame with a bad length");
+                     }
+-                    //logger_log(raop_rtp_mirror->logger, LOGGER_DEBUG, "nalu_size = %d, payloadsize = %d nalu_num = %d", nalu_size, payloadsize, nalu_num);
+-
+-                    // 写入文件
+-#ifdef DUMP_H264
+-                    fwrite(payload, payloadsize, 1, file);
+-#endif
+-                    h264_decode_struct h264_data;
+-                    h264_data.data_len = payloadsize;
+-                    h264_data.data = payload;
+-                    h264_data.frame_type = 1;
+-                    h264_data.pts = pts;
+-                    raop_rtp_mirror->callbacks.video_process(raop_rtp_mirror->callbacks.cls, &h264_data);
+                     free(payload_in);
+                     free(payload);
+                 } else if ((payloadtype & 255) == 1) {
+-                    float mWidthSource = byteutils_get_float(packet, 40);
+-                    float mHeightSource = byteutils_get_float(packet, 44);
+-                    float mWidth = byteutils_get_float(packet, 56);
+-                    float mHeight =byteutils_get_float(packet, 60);
+-                    logger_log(raop_rtp_mirror->logger, LOGGER_DEBUG, "mWidthSource = %f mHeightSource = %f mWidth = %f mHeight = %f", mWidthSource, mHeightSource, mWidth, mHeight);
+-                    /*int mRotateMode = 0;
+-
+-                    int p = payloadtype >> 8;
+-                    if (p == 4) {
+-                        mRotateMode = 1;
+-                    } else if (p == 7) {
+-                        mRotateMode = 3;
+-                    } else if (p != 0) {
+-                        mRotateMode = 2;
+-                    }*/
+-
+                     // sps_pps 这块数据是没有加密的
+-                    unsigned char payload[payloadsize];
+-                    readstart = 0;
+-                    do {
+-                        // payload数据
+-                        ret = recv(stream_fd, payload + readstart, payloadsize - readstart, 0);
+-                        readstart = readstart + ret;
+-                    } while (readstart < payloadsize);
+-                    h264codec_t h264;
+-                    h264.version = payload[0];
+-                    h264.profile_high = payload[1];
+-                    h264.compatibility = payload[2];
+-                    h264.level = payload[3];
+-                    h264.reserved6andNAL = payload[4];
+-                    h264.reserved3andSPS = payload[5];
+-                    h264.lengthofSPS = (short) (((payload[6] & 255) << 8) + (payload[7] & 255));
+-                    logger_log(raop_rtp_mirror->logger, LOGGER_DEBUG, "lengthofSPS = %d", h264.lengthofSPS);
+-                    h264.sequence = malloc(h264.lengthofSPS);
+-                    memcpy(h264.sequence, payload + 8, h264.lengthofSPS);
+-                    h264.numberOfPPS = payload[h264.lengthofSPS + 8];
+-                    h264.lengthofPPS = (short) (((payload[h264.lengthofSPS + 9] & 2040) + payload[h264.lengthofSPS + 10]) & 255);
+-                    h264.picture_parameter_set = malloc(h264.lengthofPPS);
+-                    logger_log(raop_rtp_mirror->logger, LOGGER_DEBUG, "lengthofPPS = %d", h264.lengthofPPS);
+-                    memcpy(h264.picture_parameter_set, payload + h264.lengthofSPS + 11, h264.lengthofPPS);
+-                    if (h264.lengthofSPS + h264.lengthofPPS < 102400) {
+-                        // 复制spspps
+-                        int sps_pps_len = (h264.lengthofSPS + h264.lengthofPPS) + 8;
+-                        unsigned char sps_pps[sps_pps_len];
+-                        sps_pps[0] = 0;
+-                        sps_pps[1] = 0;
+-                        sps_pps[2] = 0;
+-                        sps_pps[3] = 1;
+-                        memcpy(sps_pps + 4, h264.sequence, h264.lengthofSPS);
+-                        sps_pps[h264.lengthofSPS + 4] = 0;
+-                        sps_pps[h264.lengthofSPS + 5] = 0;
+-                        sps_pps[h264.lengthofSPS + 6] = 0;
+-                        sps_pps[h264.lengthofSPS + 7] = 1;
+-                        memcpy(sps_pps + h264.lengthofSPS + 8, h264.picture_parameter_set, h264.lengthofPPS);
+-#ifdef DUMP_H264
+-                        fwrite(sps_pps, sps_pps_len, 1, file);
+-#endif
+-                        h264_decode_struct h264_data;
+-                        h264_data.data_len = sps_pps_len;
+-                        h264_data.data = sps_pps;
+-                        h264_data.frame_type = 0;
+-                        h264_data.pts = 0;
+-                        raop_rtp_mirror->callbacks.video_process(raop_rtp_mirror->callbacks.cls, &h264_data);
++                    unsigned char* payload = malloc(payloadsize + 1);
++                    if (!payload || mirror_recv_all(raop_rtp_mirror, stream_fd, payload, payloadsize) < 0) {
++                        logger_log(raop_rtp_mirror->logger, LOGGER_INFO, "TCP socket closed inside the codec packet");
++                        free(payload);
++                        goto stream_ended;
+                     }
+-                    free(h264.picture_parameter_set);
+-                    free(h264.sequence);
+-                } else if (payloadtype == (short) 2) {
+-                    readstart = 0;
+-                    if (payloadsize > 0) {
+-                        unsigned char* payload_in = malloc(payloadsize);
+-                        do {
+-                            ret = recv(stream_fd, payload_in + readstart, payloadsize - readstart, 0);
+-                            readstart = readstart + ret;
+-                        } while (readstart < payloadsize);
++                    /* avcC: 6 bytes, the SPS length and SPS, the PPS count, the PPS length and PPS */
++                    int sps_len = payloadsize >= 8 ? (((payload[6] & 255) << 8) + (payload[7] & 255)) : -1;
++                    int pps_len = -1;
++                    if (sps_len >= 0 && sps_len + 11 <= payloadsize) {
++                        pps_len = (((payload[sps_len + 9] & 2040) + payload[sps_len + 10]) & 255);
+                     }
+-                } else if (payloadtype == (short) 4) {
+-                    readstart = 0;
+-                    if (payloadsize > 0) {
+-                        unsigned char* payload_in = malloc(payloadsize);
+-                        do {
+-                            ret = recv(stream_fd, payload_in + readstart, payloadsize - readstart, 0);
+-                            readstart = readstart + ret;
+-                        } while (readstart < payloadsize);
++                    if (pps_len >= 0 && sps_len + 11 + pps_len <= payloadsize && sps_len + pps_len < 102400) {
++                        // 复制spspps
++                        int sps_pps_len = sps_len + pps_len + 8;
++                        unsigned char* sps_pps = malloc(sps_pps_len);
++                        if (sps_pps) {
++                            sps_pps[0] = 0;
++                            sps_pps[1] = 0;
++                            sps_pps[2] = 0;
++                            sps_pps[3] = 1;
++                            memcpy(sps_pps + 4, payload + 8, sps_len);
++                            sps_pps[sps_len + 4] = 0;
++                            sps_pps[sps_len + 5] = 0;
++                            sps_pps[sps_len + 6] = 0;
++                            sps_pps[sps_len + 7] = 1;
++                            memcpy(sps_pps + sps_len + 8, payload + sps_len + 11, pps_len);
++                            h264_decode_struct h264_data;
++                            h264_data.data_len = sps_pps_len;
++                            h264_data.data = sps_pps;
++                            h264_data.frame_type = 0;
++                            h264_data.pts = 0;
++                            raop_rtp_mirror->callbacks.video_process(raop_rtp_mirror->callbacks.cls, &h264_data);
++                            free(sps_pps);
++                        }
++                    } else {
++                        logger_log(raop_rtp_mirror->logger, LOGGER_INFO, "Ignored a codec packet with bad lengths");
+                     }
++                    free(payload);
+                 } else {
+-                    readstart = 0;
+-                    if (payloadsize > 0) {
+-                        unsigned char* payload_in = malloc(payloadsize);
+-                        do {
+-                            ret = recv(stream_fd, payload_in + readstart, payloadsize - readstart, 0);
+-                            readstart = readstart + ret;
+-                        } while (readstart < payloadsize);
++                    /* heartbeats and packets of kinds we do not use: read them and drop them (they used to leak) */
++                    if (payloadsize > 0 && mirror_discard(raop_rtp_mirror, stream_fd, payloadsize) < 0) {
++                        logger_log(raop_rtp_mirror->logger, LOGGER_INFO, "TCP socket closed inside a packet");
++                        goto stream_ended;
+                     }
+                 }
+             }
+@@ -456,10 +491,15 @@ raop_rtp_mirror_thread(void *arg)
+         }
+     }
+ 
++stream_ended:
+     /* Close the stream file descriptor */
+     if (stream_fd != -1) {
+         closesocket(stream_fd);
+     }
++    /* The picture will not change any more: let the player go back to its idle screen. */
++    if (raop_rtp_mirror->callbacks.video_end) {
++        raop_rtp_mirror->callbacks.video_end(raop_rtp_mirror->callbacks.cls);
++    }
+     logger_log(raop_rtp_mirror->logger, LOGGER_INFO, "Exiting TCP raop_rtp_mirror_thread thread");
+ #ifdef DUMP_H264
+     fclose(file);
+diff --git a/app/src/main/java/com/fang/myapplication/AirPlayServer.java b/app/src/main/java/com/fang/myapplication/AirPlayServer.java
+deleted file mode 100755
+index 64f4b1a..0000000
+--- a/app/src/main/java/com/fang/myapplication/AirPlayServer.java
++++ /dev/null
+@@ -1,60 +0,0 @@
+-package com.fang.myapplication;
+-
+-import android.util.Log;
+-
+-import java.io.IOException;
+-import java.net.ServerSocket;
+-import java.net.Socket;
+-
+-public class AirPlayServer {
+-
+-    public static String TAG = "AirPlayServer";
+-
+-    private ServerSocket mServerSocket = null;
+-    private ServerThread mServerThread = null;
+-
+-    public AirPlayServer() {
+-
+-    }
+-
+-
+-    public void startServer() {
+-        try {
+-            mServerSocket = new ServerSocket(0);
+-        } catch (IOException e) {
+-            e.printStackTrace();
+-        }
+-        mServerThread = new ServerThread();
+-        mServerThread.start();
+-    }
+-
+-    public void stopServer() {
+-        try {
+-            mServerSocket.close();
+-        } catch (IOException e) {
+-            e.printStackTrace();
+-        }
+-    }
+-
+-    public int getPort() {
+-        if (mServerSocket != null) {
+-            return mServerSocket.getLocalPort();
+-        }
+-        return 0;
+-    }
+-
+-
+-    class ServerThread extends Thread {
+-
+-        @Override
+-        public void run() {
+-            try {
+-                Socket socket = mServerSocket.accept();
+-                Log.d(TAG, "receive accept");
+-            } catch (IOException e) {
+-                e.printStackTrace();
+-            }
+-
+-        }
+-    }
+-}
+diff --git a/app/src/main/java/com/fang/myapplication/DNSNotify.java b/app/src/main/java/com/fang/myapplication/DNSNotify.java
+index d874e47..7941c1e 100755
+--- a/app/src/main/java/com/fang/myapplication/DNSNotify.java
++++ b/app/src/main/java/com/fang/myapplication/DNSNotify.java
+@@ -22,11 +22,11 @@ public class DNSNotify {
+ 
+     public DNSNotify() {
+         mMacAddress = NetUtils.getLocalMacAddress();
+-        mDeviceName = "t";
++        mDeviceName = "Fire Stick";
+     }
+ 
+     public void changeDeviceName() {
+-        mDeviceName = "t" + mDeviceTail++;
++        // The name stays "Fire Stick": the old "t1", "t2" count is gone.
+     }
+ 
+     public String getDeviceName() {
+@@ -37,7 +37,7 @@ public class DNSNotify {
+         Log.d(TAG, "registerAirplay port = " + port + ", mMacAddress = " + mMacAddress);
+         TXTRecord txtRecord = new TXTRecord();
+         txtRecord.set("deviceid", mMacAddress);
+-        txtRecord.set("features", "0x5A7FFFF7,0x1E");
++        txtRecord.set("features", "0x5A7FFFE6,0x1E");
+         txtRecord.set("srcvers", "220.68");
+         txtRecord.set("flags", "0x4");
+         txtRecord.set("vv", "2");
+@@ -57,7 +57,7 @@ public class DNSNotify {
+         txtRecord.set("da", "true");
+         txtRecord.set("et", "0,3,5");
+         txtRecord.set("vv", "2");
+-        txtRecord.set("ft", "0x5A7FFFF7,0x1E");
++        txtRecord.set("ft", "0x5A7FFFE6,0x1E");
+         txtRecord.set("am", "AppleTV2,1");
+         txtRecord.set("md", "0,1,2");
+         txtRecord.set("rhd", "5.6.0.0");
+diff --git a/app/src/main/java/com/fang/myapplication/MainActivity.java b/app/src/main/java/com/fang/myapplication/MainActivity.java
+index 9c93d12..559ae63 100755
+--- a/app/src/main/java/com/fang/myapplication/MainActivity.java
++++ b/app/src/main/java/com/fang/myapplication/MainActivity.java
+@@ -14,7 +14,6 @@ public class MainActivity extends Activity implements View.OnClickListener {
+ 
+     public static String TAG = "MainActivity";
+ 
+-    private AirPlayServer mAirPlayServer;
+     private RaopServer mRaopServer;
+     private DNSNotify mDNSNotify;
+ 
+@@ -32,51 +31,63 @@ public class MainActivity extends Activity implements View.OnClickListener {
+         mTxtDevice = findViewById(R.id.txt_device);
+         mBtnControl.setOnClickListener(this);
+         mSurfaceView = findViewById(R.id.surface);
+-        mAirPlayServer = new AirPlayServer();
+         mRaopServer = new RaopServer(mSurfaceView);
++        mRaopServer.setIdleView(findViewById(R.id.idle));
+         mDNSNotify = new DNSNotify();
++        getWindow().addFlags(android.view.WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON);
++        // Start listening at once: on a TV nobody wants to find the Start button first.
++        mBtnControl.post(new Runnable() {
++            @Override
++            public void run() {
++                if (!mIsStart) onClick(mBtnControl);
++            }
++        });
++    }
++
++    @Override
++    protected void onDestroy() {
++        if (mIsStart) {
++            stopServer();
++            mIsStart = false;
++        }
++        // The player threads hold the decoder and the audio track; without this a second launch could not get them.
++        mRaopServer.release();
++        super.onDestroy();
+     }
+ 
+     @Override
+     public void onClick(View v) {
+-        switch (v.getId()) {
+-            case R.id.btn_control: {
++        if (v.getId() == R.id.btn_control) {
++            {
+                 if (!mIsStart) {
+                     startServer();
+-                    mTxtDevice.setText("设备名称:" + mDNSNotify.getDeviceName());
++                    mTxtDevice.setText("AirPlay name: " + mDNSNotify.getDeviceName());
+                 } else {
+                     stopServer();
+-                    mTxtDevice.setText("未启动");
++                    mTxtDevice.setText("Not started");
+                 }
+                 mIsStart = !mIsStart;
+-                mBtnControl.setText(mIsStart ? "结束" : "开始");
+-                break;
++                mBtnControl.setText(mIsStart ? "Stop" : "Start");
+             }
+         }
+     }
+ 
+     private void startServer() {
+         mDNSNotify.changeDeviceName();
+-        mAirPlayServer.startServer();
+-        int airplayPort = mAirPlayServer.getPort();
+-        if (airplayPort == 0) {
+-            Toast.makeText(this.getApplicationContext(), "启动airplay服务失败", Toast.LENGTH_SHORT).show();
+-        } else {
+-            mDNSNotify.registerAirplay(airplayPort);
+-        }
++        // One server answers both services, so whichever port the phone picks gets an answer.
+         mRaopServer.startServer();
+-        int raopPort = mRaopServer.getPort();
+-        if (raopPort == 0) {
+-            Toast.makeText(this.getApplicationContext(), "启动raop服务失败", Toast.LENGTH_SHORT).show();
++        int port = mRaopServer.getPort();
++        if (port == 0) {
++            Toast.makeText(this.getApplicationContext(), "AirPlay service failed to start", Toast.LENGTH_SHORT).show();
+         } else {
+-            mDNSNotify.registerRaop(raopPort);
++            mDNSNotify.registerAirplay(port);
++            mDNSNotify.registerRaop(port);
+         }
+-        Log.d(TAG, "airplayPort = " + airplayPort + ", raopPort = " + raopPort);
++        Log.d(TAG, "AirPlay and RAOP port = " + port);
+     }
+ 
+     private void stopServer() {
+         mDNSNotify.stop();
+-        mAirPlayServer.stopServer();
+         mRaopServer.stopServer();
+     }
+ 
+diff --git a/app/src/main/java/com/fang/myapplication/RaopServer.java b/app/src/main/java/com/fang/myapplication/RaopServer.java
+index 93448da..d77dfc0 100755
+--- a/app/src/main/java/com/fang/myapplication/RaopServer.java
++++ b/app/src/main/java/com/fang/myapplication/RaopServer.java
+@@ -3,6 +3,8 @@ package com.fang.myapplication;
+ import android.util.Log;
+ import android.view.SurfaceHolder;
+ import android.view.SurfaceView;
++import android.view.View;
++import android.widget.RelativeLayout;
+ 
+ import com.fang.myapplication.model.NALPacket;
+ import com.fang.myapplication.model.PCMPacket;
+@@ -16,20 +18,68 @@ public class RaopServer implements SurfaceHolder.Callback {
+         System.loadLibrary("play-lib");
+     }
+     private static final String TAG = "RaopServer";
+-    private VideoPlayer mVideoPlayer;
+-    private AudioPlayer mAudioPlayer;
+-    private SurfaceView mSurfaceView;
++    private final VideoPlayer mVideoPlayer;
++    private final AudioPlayer mAudioPlayer;
++    private final SurfaceView mSurfaceView;
++    private volatile View mIdleView;
+     private long mServerId = 0;
++    /** A mirroring session is on screen: set by its first frame, cleared when the native side says it ended. */
++    private volatile boolean mActive = false;
++
++    /** Sizes the picture to the phone's own shape (centred, bars at the sides) instead of stretching it. */
++    private final VideoPlayer.SizeListener mSizeListener = new VideoPlayer.SizeListener() {
++        @Override
++        public void onVideoSize(final int width, final int height) {
++            mSurfaceView.post(new Runnable() {
++                @Override
++                public void run() {
++                    View parent = (View) mSurfaceView.getParent();
++                    int pw = parent.getWidth(), ph = parent.getHeight();
++                    if (pw <= 0 || ph <= 0) return;
++                    float scale = Math.min((float) pw / width, (float) ph / height);
++                    RelativeLayout.LayoutParams lp = new RelativeLayout.LayoutParams(
++                            Math.round(width * scale), Math.round(height * scale));
++                    lp.addRule(RelativeLayout.CENTER_IN_PARENT);
++                    mSurfaceView.setLayoutParams(lp);
++                }
++            });
++        }
++    };
+ 
+     public RaopServer(SurfaceView surfaceView) {
+         mSurfaceView = surfaceView;
+         mSurfaceView.getHolder().addCallback(this);
+         mAudioPlayer = new AudioPlayer();
+         mAudioPlayer.start();
++        // The players live as long as the server; the video one waits for a surface and for frames.
++        mVideoPlayer = new VideoPlayer(mSizeListener);
++        mVideoPlayer.start();
++    }
++
++    /** The view shown while no session is on screen (it covers the last picture of the one that ended). */
++    public void setIdleView(View idleView) {
++        mIdleView = idleView;
+     }
+ 
++    private void showIdle(final boolean show) {
++        final View idle = mIdleView;
++        if (idle == null) return;
++        mSurfaceView.post(new Runnable() {
++            @Override
++            public void run() {
++                idle.setVisibility(show ? View.VISIBLE : View.GONE);
++            }
++        });
++    }
++
++    // Called from native threads.
+     public void onRecvVideoData(byte[] nal, int nalType, long dts, long pts) {
+-        Log.d(TAG, "onRecvVideoData pts = " + pts + ", nalType = " + nalType + ", nal length = " + nal.length);
++        if (!mActive) {
++            mActive = true;
++            Log.i(TAG, "mirroring started");
++            mVideoPlayer.newSession();
++            showIdle(false);
++        }
+         NALPacket nalPacket = new NALPacket();
+         nalPacket.nalData = nal;
+         nalPacket.nalType = nalType;
+@@ -38,13 +88,21 @@ public class RaopServer implements SurfaceHolder.Callback {
+     }
+ 
+     public void onRecvAudioData(short[] pcm, long pts) {
+-        Log.d(TAG, "onRecvAudioData pcm length = " + pcm.length + ", pts = " + pts);
+         PCMPacket pcmPacket = new PCMPacket();
+         pcmPacket.data = pcm;
+         pcmPacket.pts = pts;
+         mAudioPlayer.addPacker(pcmPacket);
+     }
+ 
++    /** The mirror stream is over, whatever the reason (the phone stopped it, the connection died, a new session replaced it). */
++    public void onVideoEnded() {
++        Log.i(TAG, "mirroring ended");
++        mActive = false;
++        mVideoPlayer.endSession();
++        mAudioPlayer.flush();
++        showIdle(true);
++    }
++
+     @Override
+     public void surfaceCreated(SurfaceHolder holder) {
+ 
+@@ -52,15 +110,13 @@ public class RaopServer implements SurfaceHolder.Callback {
+ 
+     @Override
+     public void surfaceChanged(SurfaceHolder holder, int format, int width, int height) {
+-        if (mVideoPlayer == null) {
+-            mVideoPlayer = new VideoPlayer(holder.getSurface());
+-            mVideoPlayer.start();
+-        }
++        mVideoPlayer.setSurface(holder.getSurface());
+     }
+ 
+     @Override
+     public void surfaceDestroyed(SurfaceHolder holder) {
+-
++        // The app went to the background: the video player drops its decoder and picks up again on the next surface.
++        mVideoPlayer.setSurface(null);
+     }
+ 
+     public void startServer() {
+@@ -77,6 +133,13 @@ public class RaopServer implements SurfaceHolder.Callback {
+ 
+     }
+ 
++    /** Stops the server and the two player threads, which hold the decoder and the audio track: call it when the app closes. */
++    public void release() {
++        stopServer();
++        mVideoPlayer.end();
++        mAudioPlayer.stopPlay();
++    }
++
+     public int getPort() {
+         if (mServerId != 0) {
+             return getPort(mServerId);
+diff --git a/app/src/main/java/com/fang/myapplication/player/AudioPlayer.java b/app/src/main/java/com/fang/myapplication/player/AudioPlayer.java
+index 7175e45..90de7d0 100755
+--- a/app/src/main/java/com/fang/myapplication/player/AudioPlayer.java
++++ b/app/src/main/java/com/fang/myapplication/player/AudioPlayer.java
+@@ -3,55 +3,88 @@ package com.fang.myapplication.player;
+ import android.media.AudioFormat;
+ import android.media.AudioManager;
+ import android.media.AudioTrack;
++import android.util.Log;
+ 
+ import com.fang.myapplication.model.PCMPacket;
+ 
+-import java.util.ArrayList;
+-import java.util.Collections;
+-import java.util.List;
++import java.util.concurrent.LinkedBlockingQueue;
++import java.util.concurrent.TimeUnit;
+ 
+ public class AudioPlayer extends Thread {
+ 
++    private static final String TAG = "AudioPlayer";
++
+     private AudioTrack mTrack;
+-    private int mChannel = AudioFormat.CHANNEL_OUT_STEREO;
+-    private int mSampleRate = 44100;
+-    private boolean isStopThread = false;
+-    private int mAudioFormat = AudioFormat.ENCODING_PCM_16BIT;
+-    private List<PCMPacket> mListBuffer = Collections.synchronizedList(new ArrayList<PCMPacket>());
++    private final int mChannel = AudioFormat.CHANNEL_OUT_STEREO;
++    private final int mSampleRate = 44100;
++    private final int mAudioFormat = AudioFormat.ENCODING_PCM_16BIT;
++    private volatile boolean isStopThread = false;
++    private final LinkedBlockingQueue<PCMPacket> mQueue = new LinkedBlockingQueue<PCMPacket>();
++
++    private long mStatsAt = 0;
++    private int mPackets = 0;
++    private int mTotalPackets = 0;
++    private volatile int mDropped = 0;
+ 
+     public AudioPlayer() {
+-        this.mTrack = new AudioTrack(AudioManager.STREAM_MUSIC, mSampleRate, mChannel, mAudioFormat,
+-                AudioTrack.getMinBufferSize(mSampleRate, mChannel, mAudioFormat), AudioTrack.MODE_STREAM);
+-        this.mTrack.play();
++        // Twice the minimum: enough not to underrun, small enough not to trail the picture.
++        int buffer = AudioTrack.getMinBufferSize(mSampleRate, mChannel, mAudioFormat) * 2;
++        mTrack = new AudioTrack(AudioManager.STREAM_MUSIC, mSampleRate, mChannel, mAudioFormat,
++                buffer, AudioTrack.MODE_STREAM);
++        mTrack.play();
++        Log.i(TAG, "audio track ready, state " + mTrack.getState() + ", buffer " + buffer);
+     }
+ 
++    /** The phone sends its first second or so of sound ahead of time: playing all of it would keep the
++     *  sound that much behind the picture, so only a short queue is kept and the oldest packets go. */
++    private static final int MAX_QUEUED = 6; // about 65 ms
++
+     public void addPacker(PCMPacket pcmPacket) {
+-        mListBuffer.add(pcmPacket);
++        mQueue.add(pcmPacket);
++        while (mQueue.size() > MAX_QUEUED) {
++            mQueue.poll();
++            mDropped++;
++        }
+     }
+ 
+     @Override
+     public void run() {
+-        super.run();
+         while (!isStopThread) {
+-            if (mListBuffer.size() == 0) {
+-                try {
+-                    Thread.sleep(2);
+-                } catch (InterruptedException e) {
+-                    e.printStackTrace();
++            try {
++                PCMPacket packet = mQueue.poll(50, TimeUnit.MILLISECONDS);
++                if (packet != null && mTrack != null) {
++                    mTrack.write(packet.data, 0, packet.data.length);
++                    mPackets++;
++                    mTotalPackets++;
+                 }
+-            } else {
+-                doPlay(mListBuffer.remove(0));
++            } catch (InterruptedException e) {
++                break;
++            }
++            long now = System.currentTimeMillis();
++            if (now - mStatsAt >= 1000) {
++                if (mStatsAt != 0 && mPackets > 0) {
++                    Log.i(TAG, "audio: " + mPackets + " packets/s (total " + mTotalPackets + "), queued " + mQueue.size() + ", dropped so far " + mDropped);
++                }
++                mStatsAt = now;
++                mPackets = 0;
+             }
+         }
+     }
+ 
+-    private void doPlay(PCMPacket pcmPacket) {
+-        if (mTrack != null) {
+-            mTrack.write(pcmPacket.data, 0, 960);
++    /** Throw away what is queued and what is buffered in the track: the stream they belonged to is over. */
++    public void flush() {
++        mQueue.clear();
++        AudioTrack track = mTrack;
++        if (track == null) return;
++        try {
++            track.pause();
++            track.flush();
++            track.play();
++        } catch (IllegalStateException e) {
++            Log.w(TAG, "audio flush", e);
+         }
+     }
+ 
+-
+     public void stopPlay() {
+         isStopThread = true;
+         interrupt();
+@@ -62,5 +95,4 @@ public class AudioPlayer extends Thread {
+             mTrack = null;
+         }
+     }
+-
+ }
+diff --git a/app/src/main/java/com/fang/myapplication/player/VideoPlayer.java b/app/src/main/java/com/fang/myapplication/player/VideoPlayer.java
+index 6502bac..97db99b 100755
+--- a/app/src/main/java/com/fang/myapplication/player/VideoPlayer.java
++++ b/app/src/main/java/com/fang/myapplication/player/VideoPlayer.java
+@@ -7,105 +7,298 @@ import android.view.Surface;
+ 
+ import com.fang.myapplication.model.NALPacket;
+ 
++import java.io.IOException;
+ import java.nio.ByteBuffer;
+-import java.util.ArrayList;
+-import java.util.Collections;
+-import java.util.List;
++import java.util.concurrent.LinkedBlockingQueue;
++import java.util.concurrent.TimeUnit;
+ 
++/**
++ * Decodes the mirrored H.264 stream straight onto the surface, as fast as frames arrive, and recovers from what
++ * goes wrong in real use: the stream ending, a new session starting, the surface going away (the app sent to the
++ * background and brought back), the decoder failing, and the decoder falling behind.
++ */
+ public class VideoPlayer extends Thread {
+ 
++    public interface SizeListener {
++        void onVideoSize(int width, int height);
++    }
++
+     private static final String TAG = "VideoPlayer";
++    private static final String MIME = "video/avc";
++
++    /** More than this waiting (about 1.5 s at 30 fps) means the decoder is behind: skip to the next keyframe. */
++    private static final int MAX_QUEUED = 45;
++    /** After the decoder is restarted, wait this long for a keyframe, then try whatever arrives. */
++    private static final long KEYFRAME_WAIT_MS = 3000;
++    /** After the decoder fails to start, wait this long before trying again. */
++    private static final long RETRY_MS = 500;
++
++    // Markers put in the queue, so they are handled in order with the frames around them.
++    private static final int KIND_CONFIG = 0;
++    private static final int KIND_SESSION_START = -1;
++    private static final int KIND_SESSION_END = -2;
+ 
+-    private String mMimeType = "video/avc";
+-    private int mVideoWidth  = 540;
+-    private int mVideoHeight = 960;
+-    private MediaCodec.BufferInfo mBufferInfo = new MediaCodec.BufferInfo();
+-    private MediaCodec mDecoder = null;
+-    private Surface mSurface = null;
+-    private boolean mIsEnd = false;
+-    private List<NALPacket> mListBuffer = Collections.synchronizedList(new ArrayList<NALPacket>());
++    private final SizeListener mSizeListener;
++    private final LinkedBlockingQueue<NALPacket> mQueue = new LinkedBlockingQueue<NALPacket>();
++    private final MediaCodec.BufferInfo mInfo = new MediaCodec.BufferInfo();
+ 
+-    public VideoPlayer(Surface surface) {
++    private volatile Surface mSurface;       // null while there is nothing to draw on
++    private volatile byte[] mConfig;         // the latest SPS/PPS: what a decoder started mid-stream needs first
++    private volatile boolean mIsEnd = false;
++
++    // Used only on this thread.
++    private MediaCodec mDecoder;
++    private Surface mDecoderSurface;
++    private boolean mNeedKeyframe = true;
++    private long mKeyframeWaitSince = 0;
++    private long mRetryAt = 0;
++
++    // Once a second in the log: how much arrived, how much was shown.
++    private long mStatsAt = 0;
++    private int mFedFrames = 0;
++    private int mShownFrames = 0;
++
++    public VideoPlayer(SizeListener sizeListener) {
++        mSizeListener = sizeListener;
++    }
++
++    /** The surface to draw on, or null when it has gone (the app is in the background). */
++    public void setSurface(Surface surface) {
+         mSurface = surface;
+     }
+ 
+-    public void initDecoder() {
+-        try {
+-            MediaFormat format = MediaFormat.createVideoFormat(mMimeType, mVideoWidth, mVideoHeight);
+-            mDecoder = MediaCodec.createDecoderByType(mMimeType);
+-            mDecoder.configure(format, mSurface, null, 0);
+-            mDecoder.setVideoScalingMode(MediaCodec.VIDEO_SCALING_MODE_SCALE_TO_FIT);
+-            mDecoder.start();
+-        } catch (Exception e) {
+-            e.printStackTrace();
+-        }
++    /** A new mirroring session starts: forget the old one's frames, configuration and decoder state. */
++    public void newSession() {
++        mConfig = null;
++        mQueue.clear();
++        mQueue.add(marker(KIND_SESSION_START));
++    }
++
++    /** The session is over: stop decoding and release the decoder so the next session starts clean. */
++    public void endSession() {
++        mConfig = null;
++        mQueue.clear();
++        mQueue.add(marker(KIND_SESSION_END));
+     }
+ 
+     public void addPacker(NALPacket nalPacket) {
+-        mListBuffer.add(nalPacket);
++        if (nalPacket.nalType == KIND_CONFIG) {
++            mConfig = nalPacket.nalData;
++        }
++        mQueue.add(nalPacket);
+     }
+-    
++
++    public void end() {
++        mIsEnd = true;
++        interrupt();
++    }
++
++    private static NALPacket marker(int kind) {
++        NALPacket packet = new NALPacket();
++        packet.nalType = kind;
++        return packet;
++    }
++
+     @Override
+     public void run() {
+-        super.run();
+-        initDecoder();
+         while (!mIsEnd) {
+-            if (mListBuffer.size() == 0) {
+-                try {
+-                    sleep(50);
+-                } catch (InterruptedException e) {
+-                    e.printStackTrace();
++            try {
++                NALPacket packet = mQueue.poll(20, TimeUnit.MILLISECONDS);
++                // The surface changed or went away: the decoder is tied to the old one.
++                if (mDecoder != null && mDecoderSurface != mSurface) {
++                    Log.i(TAG, "surface changed: restarting the decoder");
++                    releaseDecoder();
++                    mNeedKeyframe = true;
+                 }
+-                continue;
++                if (packet != null) {
++                    handle(packet);
++                }
++                drain();
++            } catch (InterruptedException e) {
++                break;
++            } catch (RuntimeException e) {
++                // A MediaCodec that has failed throws on every call from then on: start a new one.
++                Log.e(TAG, "decoder error, restarting it", e);
++                releaseDecoder();
++                mNeedKeyframe = true;
++                mRetryAt = System.currentTimeMillis() + RETRY_MS;
+             }
+-            doDecode(mListBuffer.remove(0));
++            logStats();
+         }
++        releaseDecoder();
+     }
+ 
+-    private void doDecode(NALPacket nalPacket) {
+-        final int TIMEOUT_USEC = 10000;
+-        ByteBuffer[] decoderInputBuffers = mDecoder.getInputBuffers();
+-        int inputBufIndex = -10000;
++    private void handle(NALPacket packet) {
++        switch (packet.nalType) {
++            case KIND_SESSION_START:
++            case KIND_SESSION_END:
++                releaseDecoder();
++                mNeedKeyframe = true;
++                mKeyframeWaitSince = 0;
++                return;
++            case KIND_CONFIG:
++                if (mDecoder != null) {
++                    feed(packet.nalData, packet.pts);
++                }
++                return;
++            default:
++                break;
++        }
++
++        Surface surface = mSurface;
++        if (surface == null || !surface.isValid()) {
++            mNeedKeyframe = true; // nothing to draw on: what is missed cannot be picked up mid-stream
++            return;
++        }
++        if (mQueue.size() > MAX_QUEUED) {
++            mNeedKeyframe = true; // behind: drop frames until the next keyframe, which is quick as it decodes nothing
++        }
++        if (mNeedKeyframe) {
++            long now = System.currentTimeMillis();
++            if (!containsKeyframe(packet.nalData)) {
++                if (mKeyframeWaitSince == 0) {
++                    mKeyframeWaitSince = now;
++                }
++                if (now - mKeyframeWaitSince <= KEYFRAME_WAIT_MS) {
++                    return;
++                }
++                Log.w(TAG, "no keyframe for " + KEYFRAME_WAIT_MS + " ms, decoding what arrives");
++            }
++            mNeedKeyframe = false;
++            mKeyframeWaitSince = 0;
++        }
++        if (mDecoder == null) {
++            if (System.currentTimeMillis() < mRetryAt) {
++                mNeedKeyframe = true;
++                return;
++            }
++            createDecoder(surface);
++        }
++        feed(packet.nalData, packet.pts);
++    }
++
++    private void createDecoder(Surface surface) {
++        MediaFormat format = MediaFormat.createVideoFormat(MIME, 1920, 1080);
++        // Lets the decoder change picture size (a phone turned sideways) without a restart.
++        format.setInteger("max-width", 1920);
++        format.setInteger("max-height", 1920);
++        MediaCodec codec;
+         try {
+-            inputBufIndex = mDecoder.dequeueInputBuffer(TIMEOUT_USEC);
+-        } catch (Exception e) {
+-            e.printStackTrace();
++            codec = MediaCodec.createDecoderByType(MIME);
++        } catch (IOException e) {
++            throw new RuntimeException("no H.264 decoder", e);
+         }
+-        if (inputBufIndex >= 0) {
+-            ByteBuffer inputBuf = decoderInputBuffers[inputBufIndex];
+-            inputBuf.put(nalPacket.nalData);
+-            mDecoder.queueInputBuffer(inputBufIndex, 0, nalPacket.nalData.length, nalPacket.pts, 0);
+-        } else {
+-            Log.d(TAG, "dequeueInputBuffer failed");
++        try {
++            codec.configure(format, surface, null, 0);
++            codec.setVideoScalingMode(MediaCodec.VIDEO_SCALING_MODE_SCALE_TO_FIT);
++            codec.start();
++        } catch (RuntimeException e) {
++            codec.release();
++            throw e;
++        }
++        mDecoder = codec;
++        mDecoderSurface = surface;
++        Log.i(TAG, "decoder started: " + codec.getName());
++        byte[] config = mConfig;
++        if (config != null) {
++            feed(config, 0);
+         }
++    }
+ 
+-        int outputBufferIndex = -10000;
++    private void releaseDecoder() {
++        MediaCodec decoder = mDecoder;
++        mDecoder = null;
++        mDecoderSurface = null;
++        if (decoder == null) {
++            return;
++        }
+         try {
+-            outputBufferIndex = mDecoder.dequeueOutputBuffer(mBufferInfo, TIMEOUT_USEC);
+-        } catch (Exception e) {
+-            e.printStackTrace();
+-        }
+-        if (outputBufferIndex >= 0) {
+-            mDecoder.releaseOutputBuffer(outputBufferIndex, true);
+-            try{
+-                Thread.sleep(50);
+-            }  catch (InterruptedException ie){
+-                ie.printStackTrace();
+-            }
+-        } else if (outputBufferIndex == MediaCodec.INFO_TRY_AGAIN_LATER) {
+-            try{
+-                Thread.sleep(10);
+-            }  catch (InterruptedException ie){
+-                ie.printStackTrace();
++            decoder.stop();
++        } catch (RuntimeException e) {
++            Log.w(TAG, "decoder stop", e);
++        }
++        try {
++            decoder.release();
++        } catch (RuntimeException e) {
++            Log.w(TAG, "decoder release", e);
++        }
++    }
++
++    private void feed(byte[] data, long pts) {
++        for (int attempt = 0; attempt < 5 && !mIsEnd && mDecoder != null; attempt++) {
++            int index = mDecoder.dequeueInputBuffer(5000);
++            if (index >= 0) {
++                ByteBuffer input = mDecoder.getInputBuffer(index);
++                input.clear();
++                input.put(data);
++                mDecoder.queueInputBuffer(index, 0, data.length, pts, 0);
++                mFedFrames++;
++                return;
+             }
+-        } else if (outputBufferIndex == MediaCodec.INFO_OUTPUT_BUFFERS_CHANGED) {
+-            // not important for us, since we're using Surface
++            drain(); // the decoder is full of finished pictures: show them, then try again
++        }
++        Log.w(TAG, "decoder busy, dropped a frame");
++    }
+ 
+-        } else if (outputBufferIndex == MediaCodec.INFO_OUTPUT_FORMAT_CHANGED) {
++    private void drain() {
++        while (mDecoder != null) {
++            int index = mDecoder.dequeueOutputBuffer(mInfo, 0);
++            if (index >= 0) {
++                mDecoder.releaseOutputBuffer(index, true); // show it now
++                mShownFrames++;
++            } else if (index == MediaCodec.INFO_OUTPUT_FORMAT_CHANGED) {
++                reportSize(mDecoder.getOutputFormat());
++            } else if (index != MediaCodec.INFO_OUTPUT_BUFFERS_CHANGED) {
++                return; // INFO_TRY_AGAIN_LATER
++            }
++        }
++    }
+ 
+-        } else {
++    /**
++     * Whether this frame is a keyframe (an IDR slice, NAL type 5). The units start with 00 00 01 or 00 00 00 01,
++     * which cannot occur inside a unit, so a scan for them is reliable. The first slice (type 1 or 5) decides.
++     */
++    private static boolean containsKeyframe(byte[] data) {
++        if (data == null) {
++            return false;
++        }
++        for (int i = 0; i + 3 < data.length; i++) {
++            if (data[i] == 0 && data[i + 1] == 0 && data[i + 2] == 1) {
++                int type = data[i + 3] & 0x1f;
++                if (type == 5) {
++                    return true;
++                }
++                if (type == 1) {
++                    return false;
++                }
++                i += 2;
++            }
++        }
++        return false;
++    }
+ 
++    private void reportSize(MediaFormat format) {
++        int width = format.getInteger(MediaFormat.KEY_WIDTH);
++        int height = format.getInteger(MediaFormat.KEY_HEIGHT);
++        if (format.containsKey("crop-left") && format.containsKey("crop-right")
++                && format.containsKey("crop-top") && format.containsKey("crop-bottom")) {
++            width = format.getInteger("crop-right") - format.getInteger("crop-left") + 1;
++            height = format.getInteger("crop-bottom") - format.getInteger("crop-top") + 1;
+         }
++        Log.i(TAG, "picture size " + width + "x" + height);
++        if (mSizeListener != null && width > 0 && height > 0) {
++            mSizeListener.onVideoSize(width, height);
++        }
++    }
+ 
++    private void logStats() {
++        long now = System.currentTimeMillis();
++        if (now - mStatsAt < 1000) return;
++        if (mStatsAt != 0 && (mFedFrames > 0 || mShownFrames > 0)) {
++            Log.i(TAG, "video: fed " + mFedFrames + "/s, shown " + mShownFrames + "/s, queued " + mQueue.size());
++        }
++        mStatsAt = now;
++        mFedFrames = 0;
++        mShownFrames = 0;
+     }
+ }
+diff --git a/app/src/main/res/layout/activity_main.xml b/app/src/main/res/layout/activity_main.xml
+index a48f644..1dc13f2 100755
+--- a/app/src/main/res/layout/activity_main.xml
++++ b/app/src/main/res/layout/activity_main.xml
+@@ -9,17 +9,26 @@
+         android:id="@+id/surface"
+         android:layout_width="match_parent"
+         android:layout_height="match_parent" />
++    <TextView
++        android:id="@+id/idle"
++        android:layout_width="match_parent"
++        android:layout_height="match_parent"
++        android:background="#000000"
++        android:gravity="center"
++        android:text="Ready&#10;Choose Fire Stick in Screen Mirroring on your iPhone, iPad or Mac"
++        android:textColor="#ffffff"
++        android:textSize="28sp" />
+     <Button
+         android:id="@+id/btn_control"
+         android:layout_width="wrap_content"
+         android:layout_height="wrap_content"
+-        android:text="开始"
++        android:text="Start"
+         android:layout_marginLeft="15dp"/>
+     <TextView
+         android:id="@+id/txt_device"
+         android:layout_width="wrap_content"
+         android:layout_height="wrap_content"
+-        android:text="未启动"
++        android:text="Not started"
+         android:layout_toRightOf="@id/btn_control"
+         android:layout_marginLeft="15dp"
+         android:layout_alignBaseline="@id/btn_control"
+diff --git a/app/src/main/res/values/strings.xml b/app/src/main/res/values/strings.xml
+index 680c0f2..1549361 100755
+--- a/app/src/main/res/values/strings.xml
++++ b/app/src/main/res/values/strings.xml
+@@ -1,3 +1,3 @@
+ <resources>
+-    <string name="app_name">My Application</string>
++    <string name="app_name">AirPlay Receiver</string>
+ </resources>
+diff --git a/build.gradle b/build.gradle
+index 5f89027..f4fa5de 100755
+--- a/build.gradle
++++ b/build.gradle
+@@ -1,27 +1 @@
+-// Top-level build file where you can add configuration options common to all sub-projects/modules.
+-
+-buildscript {
+-    
+-    repositories {
+-        jcenter()
+-        google()
+-    }
+-    dependencies {
+-        classpath 'com.android.tools.build:gradle:3.2.1'
+-        
+-
+-        // NOTE: Do not place your application dependencies here; they belong
+-        // in the individual module build.gradle files
+-    }
+-}
+-
+-allprojects {
+-    repositories {
+-        jcenter()
+-        google()
+-    }
+-}
+-
+-task clean(type: Delete) {
+-    delete rootProject.buildDir
+-}
++plugins { id 'com.android.application' version '8.5.2' apply false }
+diff --git a/gradle.properties b/gradle.properties
+index 47aee3c..b9709dd 100755
+--- a/gradle.properties
++++ b/gradle.properties
+@@ -1,20 +1 @@
+-# Project-wide Gradle settings.
+-# IDE (e.g. Android Studio) users:
+-# Gradle settings configured through the IDE *will override*
+-# any settings specified in this file.
+-# For more details on how to configure your build environment visit
+-# http://www.gradle.org/docs/current/userguide/build_environment.html
+-# Specifies the JVM arguments used for the daemon process.
+-# The setting is particularly useful for tweaking memory settings.
+-org.gradle.jvmargs=-Xmx1536m
+-# When configured, Gradle will run in incubating parallel mode.
+-# This option should only be used with decoupled projects. More details, visit
+-# http://www.gradle.org/docs/current/userguide/multi_project_builds.html#sec:decoupled_projects
+-# org.gradle.parallel=true
+-systemProp.https.nonProxyHosts=*.oa.com
+-systemProp.https.proxyPort=8080
+-systemProp.http.proxyHost=dev-proxy.oa.com
+-systemProp.http.nonProxyHosts=*.oa.com
+-channel_file=channel.txt
+-systemProp.https.proxyHost=dev-proxy.oa.com
+-systemProp.http.proxyPort=8080
+\ No newline at end of file
++org.gradle.jvmargs=-Xmx2048m -Dfile.encoding=UTF-8
+diff --git a/settings.gradle b/settings.gradle
+index d3db109..7a102e0 100755
+--- a/settings.gradle
++++ b/settings.gradle
+@@ -1 +1,8 @@
++pluginManagement {
++    repositories { google(); mavenCentral(); gradlePluginPortal() }
++}
++dependencyResolutionManagement {
++    repositories { google(); mavenCentral() }
++}
++rootProject.name = "AirplayServer"
+ include ':app'
