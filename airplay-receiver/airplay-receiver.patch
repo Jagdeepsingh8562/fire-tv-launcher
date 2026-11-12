@@ -108,7 +108,7 @@ index 5f59d84..3e75e51 100755
          </activity>
      </application>
 diff --git a/app/src/main/cpp/jni_raop_server.cpp b/app/src/main/cpp/jni_raop_server.cpp
-index 9aba07a..169d888 100755
+index 9aba07a..d182f1e 100755
 --- a/app/src/main/cpp/jni_raop_server.cpp
 +++ b/app/src/main/cpp/jni_raop_server.cpp
 @@ -10,39 +10,59 @@
@@ -201,7 +201,7 @@ index 9aba07a..169d888 100755
  extern "C" void
  log_callback(void *cls, int level, const char *msg) {
      switch (level) {
-@@ -90,6 +119,7 @@ log_callback(void *cls, int level, const char *msg) {
+@@ -90,18 +119,25 @@ log_callback(void *cls, int level, const char *msg) {
  extern "C" JNIEXPORT jint JNICALL
  JNI_OnLoad(JavaVM* vm, void* reserved) {
      g_JavaVM = vm;
@@ -209,7 +209,9 @@ index 9aba07a..169d888 100755
      return JNI_VERSION_1_6;
  }
  
-@@ -98,10 +128,16 @@ Java_com_fang_myapplication_RaopServer_start(JNIEnv* env, jobject object) {
+ extern "C" JNIEXPORT jlong JNICALL
+-Java_com_fang_myapplication_RaopServer_start(JNIEnv* env, jobject object) {
++Java_com_fang_myapplication_RaopServer_start(JNIEnv* env, jobject object, jint mode, jstring deviceId) {
      raop_t *raop;
      raop_callbacks_t raop_cbs;
      memset(&raop_cbs, 0, sizeof(raop_cbs));
@@ -227,19 +229,38 @@ index 9aba07a..169d888 100755
      raop = raop_init(10, &raop_cbs);
      if (raop == NULL) {
          LOGE("raop = NULL");
-@@ -111,7 +147,7 @@ Java_com_fang_myapplication_RaopServer_start(JNIEnv* env, jobject object) {
+@@ -110,8 +146,16 @@ Java_com_fang_myapplication_RaopServer_start(JNIEnv* env, jobject object) {
+         LOGD("raop init success");
      }
  
++    raop_set_mode(raop, (int) mode);
++    if (deviceId != NULL) {
++        const char *id = env->GetStringUTFChars(deviceId, NULL);
++        if (id != NULL) {
++            raop_set_device_id(raop, id);
++            env->ReleaseStringUTFChars(deviceId, id);
++        }
++    }
      raop_set_log_callback(raop, log_callback, NULL);
 -    raop_set_log_level(raop, RAOP_LOG_DEBUG);
 +    raop_set_log_level(raop, RAOP_LOG_INFO);
  
      unsigned short port = 0;
      raop_start(raop, &port);
-@@ -126,6 +162,11 @@ Java_com_fang_myapplication_RaopServer_getPort(JNIEnv* env, jobject object, jlon
+@@ -126,6 +170,21 @@ Java_com_fang_myapplication_RaopServer_getPort(JNIEnv* env, jobject object, jlon
      return raop_get_port(raop);
  }
  
++extern "C" JNIEXPORT void JNICALL
++Java_com_fang_myapplication_RaopServer_setHevc(JNIEnv* env, jobject object, jlong opaque, jint enabled) {
++    raop_set_hevc((raop_t *) (void *) opaque, (int) enabled);
++}
++
++extern "C" JNIEXPORT void JNICALL
++Java_com_fang_myapplication_RaopServer_setMode(JNIEnv* env, jobject object, jlong opaque, jint mode) {
++    raop_set_mode((raop_t *) (void *) opaque, (int) mode);
++}
++
 +extern "C" JNIEXPORT void JNICALL
 +Java_com_fang_myapplication_RaopServer_endSession(JNIEnv* env, jobject object, jlong opaque) {
 +    raop_end_session((raop_t *) (void *) opaque);
@@ -335,10 +356,20 @@ index fce9df7..74ffcb8 100755
  				logger_log(httpd->logger, LOGGER_INFO, "Connection closed for socket %d", connection->socket_fd);
  				httpd_remove_connection(httpd, connection);
 diff --git a/app/src/main/cpp/lib/raop.c b/app/src/main/cpp/lib/raop.c
-index a6387b0..8bb621d 100755
+index a6387b0..b2e33bf 100755
 --- a/app/src/main/cpp/lib/raop.c
 +++ b/app/src/main/cpp/lib/raop.c
-@@ -52,6 +52,13 @@ struct raop_conn_s {
+@@ -43,6 +43,9 @@ struct raop_s {
+ 	httpd_t *httpd;
+ 
+     unsigned short port;
++    int mode;
++    char device_id[24];
++    int hevc;
+ };
+ 
+ struct raop_conn_s {
+@@ -52,6 +55,13 @@ struct raop_conn_s {
  	fairplay_t *fairplay;
  	pairing_session_t *pairing;
  
@@ -352,7 +383,7 @@ index a6387b0..8bb621d 100755
  	unsigned char *local;
  	int locallen;
  
-@@ -61,6 +68,24 @@ struct raop_conn_s {
+@@ -61,6 +71,24 @@ struct raop_conn_s {
  };
  typedef struct raop_conn_s raop_conn_t;
  
@@ -377,7 +408,7 @@ index a6387b0..8bb621d 100755
  #include "raop_handlers.h"
  
  static void *
-@@ -130,6 +155,11 @@ conn_request(void *ptr, http_request_t *request, http_response_t **response)
+@@ -130,6 +158,11 @@ conn_request(void *ptr, http_request_t *request, http_response_t **response)
  {
  	raop_conn_t *conn = ptr;
      logger_log(conn->raop->logger, LOGGER_DEBUG, "conn_request");
@@ -389,7 +420,7 @@ index a6387b0..8bb621d 100755
  	const char *method;
  	const char *url;
  	const char *cseq;
-@@ -141,6 +171,17 @@ conn_request(void *ptr, http_request_t *request, http_response_t **response)
+@@ -141,6 +174,17 @@ conn_request(void *ptr, http_request_t *request, http_response_t **response)
  	url = http_request_get_url(request);
  	cseq = http_request_get_header(request, "CSeq");
  	if (!method || !cseq) {
@@ -407,7 +438,7 @@ index a6387b0..8bb621d 100755
  		return;
  	}
  
-@@ -150,7 +191,7 @@ conn_request(void *ptr, http_request_t *request, http_response_t **response)
+@@ -150,7 +194,7 @@ conn_request(void *ptr, http_request_t *request, http_response_t **response)
  	//http_response_add_header(*response, "Apple-Jack-Status", "connected; type=analog");
  	http_response_add_header(*response, "Server", "AirTunes/220.68");
  
@@ -416,7 +447,7 @@ index a6387b0..8bb621d 100755
  	raop_handler_t handler = NULL;
  	if (!strcmp(method, "GET") && !strcmp(url, "/info")) {
  		handler = &raop_handler_info;
-@@ -189,17 +230,40 @@ conn_request(void *ptr, http_request_t *request, http_response_t **response)
+@@ -189,17 +233,40 @@ conn_request(void *ptr, http_request_t *request, http_response_t **response)
  			logger_log(conn->raop->logger, LOGGER_WARNING, "RAOP not initialized at FLUSH");
  		}
  	} else if (!strcmp(method, "TEARDOWN")) {
@@ -467,7 +498,7 @@ index a6387b0..8bb621d 100755
  	}
  	if (handler != NULL) {
  		handler(conn, request, *response, &response_data, &response_datalen);
-@@ -217,6 +281,9 @@ conn_destroy(void *ptr)
+@@ -217,6 +284,9 @@ conn_destroy(void *ptr)
  {
  	raop_conn_t *conn = ptr;
  
@@ -477,10 +508,29 @@ index a6387b0..8bb621d 100755
  	if (conn->raop_rtp) {
  		/* This is done in case TEARDOWN was not called */
  		raop_rtp_destroy(conn->raop_rtp);
-@@ -289,6 +356,13 @@ raop_init(int max_clients, raop_callbacks_t *callbacks)
+@@ -289,6 +359,32 @@ raop_init(int max_clients, raop_callbacks_t *callbacks)
  	return raop;
  }
  
++void
++raop_set_mode(raop_t *raop, int mode)
++{
++	raop->mode = mode;
++}
++
++void
++raop_set_hevc(raop_t *raop, int enabled)
++{
++	raop->hevc = enabled;
++}
++
++void
++raop_set_device_id(raop_t *raop, const char *device_id)
++{
++	strncpy(raop->device_id, device_id ? device_id : "", sizeof(raop->device_id) - 1);
++	raop->device_id[sizeof(raop->device_id) - 1] = 0;
++}
++
 +void
 +raop_end_session(raop_t *raop)
 +{
@@ -492,7 +542,7 @@ index a6387b0..8bb621d 100755
  raop_destroy(raop_t *raop)
  {
 diff --git a/app/src/main/cpp/lib/raop.h b/app/src/main/cpp/lib/raop.h
-index 566bbd5..78a143a 100755
+index 566bbd5..e2c807e 100755
 --- a/app/src/main/cpp/lib/raop.h
 +++ b/app/src/main/cpp/lib/raop.h
 @@ -33,6 +33,8 @@ struct raop_callbacks_s {
@@ -504,24 +554,57 @@ index 566bbd5..78a143a 100755
  
  	/* Optional but recommended callback functions */
  	void  (*audio_flush)(void *cls, void *session);
-@@ -51,6 +53,9 @@ RAOP_API void raop_set_log_callback(raop_t *raop, raop_log_callback_t callback,
+@@ -51,6 +53,17 @@ RAOP_API void raop_set_log_callback(raop_t *raop, raop_log_callback_t callback,
  RAOP_API void raop_set_port(raop_t *raop, unsigned short port);
  RAOP_API unsigned short raop_get_port(raop_t *raop);
  RAOP_API void *raop_get_callback_cls(raop_t *raop);
 +/* Ask for the current mirroring session to be ended (the player cannot recover its picture): the sender then starts a
 + * new one. Safe from any thread; the HTTP thread, which owns the connection, acts on it at its next request. */
 +RAOP_API void raop_end_session(raop_t *raop);
++/* The mode this server offers (see raop_handlers.h): 1 low latency, 2 high quality (0 is the balanced default). It
++ * decides what display the receiver says it has in /info, which is what the sender fits its frame rate to. It can be
++ * changed at any time; it takes effect for the next session, since a sender reads /info as it starts one. */
++RAOP_API void raop_set_mode(raop_t *raop, int mode);
++/* The device id ("20:a1:71:7a:24:c5") this server reports in /info; it must match the one in its mDNS records. */
++RAOP_API void raop_set_device_id(raop_t *raop, const char *device_id);
++/* Offer H.265 to senders: feature bit 42 ("SupportsScreenMultiCodec") in /info (and in the mDNS records). */
++RAOP_API void raop_set_hevc(raop_t *raop, int enabled);
  RAOP_API int raop_start(raop_t *raop, unsigned short *port);
  RAOP_API int raop_is_running(raop_t *raop);
  RAOP_API void raop_stop(raop_t *raop);
 diff --git a/app/src/main/cpp/lib/raop_handlers.h b/app/src/main/cpp/lib/raop_handlers.h
-index fdad0d5..624f6cc 100755
+index fdad0d5..fb124bd 100755
 --- a/app/src/main/cpp/lib/raop_handlers.h
 +++ b/app/src/main/cpp/lib/raop_handlers.h
-@@ -21,6 +21,37 @@
+@@ -21,6 +21,62 @@
  typedef void (*raop_handler_t)(raop_conn_t *, http_request_t *,
                                 http_response_t *, char **, int *);
  
++/* The modes a server can offer. A mode is what the receiver says its display is: the sender fits its picture size and
++ * frame rate to it (it keeps its own 100 ms low-latency encoder setting and picks the bitrate itself). */
++#define RAOP_MODE_BALANCED 0
++#define RAOP_MODE_LOW_LATENCY 1
++#define RAOP_MODE_HIGH_QUALITY 2
++
++static void
++raop_mode_display(int mode, int *width, int *height, int *max_fps, int *refresh)
++{
++    *width = 1920;
++    *height = 1080;
++    *max_fps = 30;
++    *refresh = 60;
++    if (mode == RAOP_MODE_LOW_LATENCY) {
++        /* 1080p at up to 60 fps (the stick showed bursts of 58 a second with the queue empty); the receiver
++         * also plays each frame the moment it is decoded */
++        *max_fps = 60;
++    } else if (mode == RAOP_MODE_HIGH_QUALITY) {
++        /* a film has 24 frames a second, so the sender is asked for no more; the receiver also smooths the
++         * playback. Measured with a Mac (one rough comparison, content not identical): about the same total
++         * bitrate (1.3 against 1.5 Mbps) and about 16% more bits per frame (57 against 49 kbit). */
++        *max_fps = 24;
++    }
++}
++
 +/* Diagnostics: the first few request bodies, to see what the sender asks of the receiver (resolution, rates,
 + * latency). The first setup carries the session keys and is not logged. */
 +static void
@@ -556,7 +639,7 @@ index fdad0d5..624f6cc 100755
  static void
  raop_handler_info(raop_conn_t *conn,
  					   http_request_t *request, http_response_t *response,
-@@ -53,7 +84,7 @@ raop_handler_info(raop_conn_t *conn,
+@@ -53,7 +109,7 @@ raop_handler_info(raop_conn_t *conn,
  			,0x65,0x54,0xe7,0x5a,0x6d,0x61,0x63,0x41,0x64,0x64,0x72,0x65,0x73,0x73,0x10,0x02
  			,0xa1,0x2c,0x10,0x04,0xa2,0x13,0x19,0x5c,0x61,0x75,0x64,0x69,0x6f,0x46,0x6f,0x72
  			,0x6d,0x61,0x74,0x73,0x54,0x6e,0x61,0x6d,0x65,0x08,0x52,0x76,0x76,0x13,0x00,0x00
@@ -565,7 +648,58 @@ index fdad0d5..624f6cc 100755
  			,0x74,0x65,0x6e,0x63,0x79,0x4d,0x69,0x63,0x72,0x6f,0x73,0x5b,0x73,0x74,0x61,0x74
  			,0x75,0x73,0x46,0x6c,0x61,0x67,0x73,0x57,0x41,0x70,0x70,0x6c,0x65,0x54,0x56,0xd4
  			,0x1e,0x20,0x22,0x16,0x1f,0x21,0x21,0x17,0x57,0x64,0x65,0x66,0x61,0x75,0x6c,0x74
-@@ -225,7 +256,6 @@ raop_handler_options(raop_conn_t *conn,
+@@ -84,6 +140,50 @@ raop_handler_info(raop_conn_t *conn,
+ 			,0x00,0x00,0x00,0x3e,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00
+ 			,0x00,0x00,0x02,0xa8
+ 	};
++	/* The display offered depends on the mode: change those entries of the template and send it. */
++	{
++		plist_t root = NULL;
++		char *bin = NULL;
++		uint32_t binlen = 0;
++		plist_from_bin(info, (uint32_t) sizeof(info), &root);
++		if (root) {
++			plist_t displays = plist_dict_get_item(root, "displays");
++			plist_t display = displays ? plist_array_get_item(displays, 0) : NULL;
++			if (display) {
++				int width, height, max_fps, refresh;
++				raop_mode_display(conn->raop->mode, &width, &height, &max_fps, &refresh);
++				plist_dict_set_item(display, "width", plist_new_uint(width));
++				plist_dict_set_item(display, "height", plist_new_uint(height));
++				plist_dict_set_item(display, "widthPixels", plist_new_uint(width));
++				plist_dict_set_item(display, "heightPixels", plist_new_uint(height));
++				plist_dict_set_item(display, "refreshRate", plist_new_uint(refresh));
++				plist_dict_set_item(display, "maxFPS", plist_new_uint(max_fps));
++				if (conn->raop->hevc) {
++					/* feature bit 42, SupportsScreenMultiCodec: the sender may then use H.265 */
++					plist_dict_set_item(root, "features", plist_new_uint(0x1E5A7FFFE6ULL | (1ULL << 42)));
++				}
++				if (conn->raop->device_id[0]) {
++					plist_dict_set_item(root, "deviceID", plist_new_string(conn->raop->device_id));
++					plist_dict_set_item(root, "macAddress", plist_new_string(conn->raop->device_id));
++				}
++				logger_log(conn->raop->logger, LOGGER_INFO, "/info: display %dx%d, up to %d fps (mode %d)",
++				           width, height, max_fps, conn->raop->mode);
++			}
++			plist_to_bin(root, &bin, &binlen);
++			plist_free(root);
++		}
++		if (bin && binlen > 0) {
++			*response_data = malloc(binlen);
++			if (*response_data) {
++				memcpy(*response_data, bin, binlen);
++				*response_datalen = binlen;
++				http_response_add_header(response, "Content-Type", "application/x-apple-binary-plist");
++			}
++			free(bin);
++			return;
++		}
++		free(bin);
++	}
+ 	size_t len = sizeof(info);
+ 	*response_data = malloc(len);
+ 	memcpy(*response_data, info, len);
+@@ -225,7 +325,6 @@ raop_handler_options(raop_conn_t *conn,
  	http_response_add_header(response, "Public", "SETUP, RECORD, PAUSE, FLUSH, TEARDOWN, OPTIONS, GET_PARAMETER, SET_PARAMETER");
  }
  
@@ -573,7 +707,7 @@ index fdad0d5..624f6cc 100755
  
  static void
  raop_handler_setup(raop_conn_t *conn,
-@@ -269,26 +299,42 @@ raop_handler_setup(raop_conn_t *conn,
+@@ -269,26 +368,42 @@ raop_handler_setup(raop_conn_t *conn,
      // 解析bplist
      plist_t root_node = NULL;
      plist_from_bin(data, datalen, &root_node);
@@ -619,7 +753,7 @@ index fdad0d5..624f6cc 100755
          plist_t time_note = plist_dict_get_item(root_node, "timingPort");
          plist_get_uint_val(time_note, &timing_rport);
  		logger_log(conn->raop->logger, LOGGER_DEBUG, "timing_rport = %llu", timing_rport);
-@@ -297,11 +343,22 @@ raop_handler_setup(raop_conn_t *conn,
+@@ -297,11 +412,22 @@ raop_handler_setup(raop_conn_t *conn,
          logger_log(conn->raop->logger, LOGGER_DEBUG, "fairplay_decrypt ret = %d", ret);
  		unsigned char ecdh_secret[32];
          pairing_get_ecdh_secret_key(conn->pairing, ecdh_secret);
@@ -644,7 +778,7 @@ index fdad0d5..624f6cc 100755
          logger_log(conn->raop->logger, LOGGER_DEBUG, "SETUP 2");
  		plist_t stream_note = plist_array_get_item(streams_note, 0);
  		plist_t type_note = plist_dict_get_item(stream_note, "type");
-@@ -348,6 +405,11 @@ raop_handler_setup(raop_conn_t *conn,
+@@ -348,6 +474,11 @@ raop_handler_setup(raop_conn_t *conn,
          logger_log(conn->raop->logger, LOGGER_DEBUG, "SETUP 3");
          unsigned short cport = 0, tport = 0, dport = 0;
  
@@ -656,7 +790,7 @@ index fdad0d5..624f6cc 100755
          if (conn->raop_rtp) {
              raop_rtp_start_audio(conn->raop_rtp, use_udp, remote_cport, remote_tport, &cport, &tport, &dport);
              logger_log(conn->raop->logger, LOGGER_DEBUG, "RAOP initialized success");
-@@ -499,6 +561,16 @@ raop_handler_feedback(raop_conn_t *conn,
+@@ -499,6 +630,16 @@ raop_handler_feedback(raop_conn_t *conn,
                             char **response_data, int *response_datalen)
  {
      logger_log(conn->raop->logger, LOGGER_DEBUG, "raop_handler_feedback");
@@ -749,7 +883,7 @@ index 46f9390..7e76ef7 100755
          }
  
 diff --git a/app/src/main/cpp/lib/raop_rtp_mirror.c b/app/src/main/cpp/lib/raop_rtp_mirror.c
-index 792b1bd..0890d22 100755
+index 792b1bd..e17159e 100755
 --- a/app/src/main/cpp/lib/raop_rtp_mirror.c
 +++ b/app/src/main/cpp/lib/raop_rtp_mirror.c
 @@ -9,6 +9,13 @@
@@ -935,7 +1069,7 @@ index 792b1bd..0890d22 100755
  
                  // 处理内容数据
                  if (payloadtype == 0) {
-@@ -311,143 +417,94 @@ raop_rtp_mirror_thread(void *arg)
+@@ -311,143 +417,104 @@ raop_rtp_mirror_thread(void *arg)
                          pts =  ntptopts(payloadntp) - pts_base;
                      }
                      // 这里是加密的数据
@@ -1096,6 +1230,16 @@ index 792b1bd..0890d22 100755
 -                            ret = recv(stream_fd, payload_in + readstart, payloadsize - readstart, 0);
 -                            readstart = readstart + ret;
 -                        } while (readstart < payloadsize);
++                    {
++                        static int logged = 0;
++                        if (logged < 4 && payloadsize >= 8) {
++                            logged++;
++                            logger_log(raop_rtp_mirror->logger, LOGGER_INFO,
++                                       "mirror codec packet: header bytes 4-7 = %02x %02x %02x %02x, %d bytes, starts %02x %02x %02x %02x %02x %02x %02x %02x",
++                                       packet[4], packet[5], packet[6], packet[7], payloadsize,
++                                       payload[0], payload[1], payload[2], payload[3], payload[4], payload[5], payload[6], payload[7]);
++                        }
++                    }
 +                    /* avcC: 6 bytes, the SPS length and SPS, the PPS count, the PPS length and PPS */
 +                    int sps_len = payloadsize >= 8 ? (((payload[6] & 255) << 8) + (payload[7] & 255)) : -1;
 +                    int pps_len = -1;
@@ -1152,7 +1296,7 @@ index 792b1bd..0890d22 100755
                      }
                  }
              }
-@@ -456,10 +513,15 @@ raop_rtp_mirror_thread(void *arg)
+@@ -456,10 +523,15 @@ raop_rtp_mirror_thread(void *arg)
          }
      }
  
@@ -1168,7 +1312,7 @@ index 792b1bd..0890d22 100755
      logger_log(raop_rtp_mirror->logger, LOGGER_INFO, "Exiting TCP raop_rtp_mirror_thread thread");
  #ifdef DUMP_H264
      fclose(file);
-@@ -564,6 +626,8 @@ raop_rtp_init_mirror_sockets(raop_rtp_mirror_t *raop_rtp_mirror, int use_ipv6)
+@@ -564,6 +636,8 @@ raop_rtp_init_mirror_sockets(raop_rtp_mirror_t *raop_rtp_mirror, int use_ipv6)
          goto sockets_cleanup;
  
  
@@ -1244,66 +1388,129 @@ index 64f4b1a..0000000
 -    }
 -}
 diff --git a/app/src/main/java/com/fang/myapplication/DNSNotify.java b/app/src/main/java/com/fang/myapplication/DNSNotify.java
-index d874e47..7941c1e 100755
+index d874e47..a8b42ca 100755
 --- a/app/src/main/java/com/fang/myapplication/DNSNotify.java
 +++ b/app/src/main/java/com/fang/myapplication/DNSNotify.java
-@@ -22,11 +22,11 @@ public class DNSNotify {
+@@ -14,30 +14,37 @@ public class DNSNotify {
  
-     public DNSNotify() {
-         mMacAddress = NetUtils.getLocalMacAddress();
+     public static String TAG = "DNSNotify";
+ 
++    /** The one name the receiver appears under in Screen Mirroring. */
++    public static final String NAME = "Fire Stick";
++
+     private Register mAirplayRegister;
+     private Register mRaopRegister;
+-    private String mDeviceName;
+-    private int mDeviceTail = 1;
+-    private String mMacAddress;
++    private final String mMacAddress;
++    private boolean mHevc = false;
+ 
+-    public DNSNotify() {
+-        mMacAddress = NetUtils.getLocalMacAddress();
 -        mDeviceName = "t";
-+        mDeviceName = "Fire Stick";
++    /** Whether the records say the receiver takes H.265 (feature bit 42): set before registering. */
++    public void setHevc(boolean enabled) {
++        mHevc = enabled;
      }
  
-     public void changeDeviceName() {
+-    public void changeDeviceName() {
 -        mDeviceName = "t" + mDeviceTail++;
-+        // The name stays "Fire Stick": the old "t1", "t2" count is gone.
++    private String features() {
++        return mHevc ? "0x5A7FFFE6,0x41E" : "0x5A7FFFE6,0x1E";
++    }
++
++    public DNSNotify() {
++        mMacAddress = NetUtils.getLocalMacAddress();
      }
  
-     public String getDeviceName() {
-@@ -37,7 +37,7 @@ public class DNSNotify {
+-    public String getDeviceName() {
+-        return mDeviceName;
++    /** The device id: the Wi-Fi MAC address. /info reports the same one, so the sender sees one consistent receiver. */
++    public String getDeviceId() {
++        return mMacAddress;
+     }
+ 
+     public void registerAirplay(int port) {
          Log.d(TAG, "registerAirplay port = " + port + ", mMacAddress = " + mMacAddress);
          TXTRecord txtRecord = new TXTRecord();
          txtRecord.set("deviceid", mMacAddress);
 -        txtRecord.set("features", "0x5A7FFFF7,0x1E");
-+        txtRecord.set("features", "0x5A7FFFE6,0x1E");
++        txtRecord.set("features", features());
          txtRecord.set("srcvers", "220.68");
          txtRecord.set("flags", "0x4");
          txtRecord.set("vv", "2");
-@@ -57,7 +57,7 @@ public class DNSNotify {
+@@ -46,7 +53,7 @@ public class DNSNotify {
+         txtRecord.set("rhd", "5.6.0.0");
+         txtRecord.set("pk", "b07727d6f6cd6e08b58ede525ec3cdeaa252ad9f683feb212ef8a205246554e7");
+         txtRecord.set("pi", "2e388006-13ba-4041-9a67-25dd4a43d536");
+-        this.mAirplayRegister = new Register(txtRecord, this.mDeviceName, "_airplay._tcp", "local.", "", port);
++        this.mAirplayRegister = new Register(txtRecord, NAME, "_airplay._tcp", "local.", "", port);
+     }
+ 
+     public void registerRaop(int port) {
+@@ -57,7 +64,7 @@ public class DNSNotify {
          txtRecord.set("da", "true");
          txtRecord.set("et", "0,3,5");
          txtRecord.set("vv", "2");
 -        txtRecord.set("ft", "0x5A7FFFF7,0x1E");
-+        txtRecord.set("ft", "0x5A7FFFE6,0x1E");
++        txtRecord.set("ft", features());
          txtRecord.set("am", "AppleTV2,1");
          txtRecord.set("md", "0,1,2");
          txtRecord.set("rhd", "5.6.0.0");
+@@ -71,15 +78,17 @@ public class DNSNotify {
+         txtRecord.set("vs", "220.68");
+         txtRecord.set("vn", "65537");
+         txtRecord.set("pk", "b07727d6f6cd6e08b58ede525ec3cdeaa252ad9f683feb212ef8a205246554e7");
+-        this.mRaopRegister = new Register(txtRecord, mMacAddress.replace(":", "") + "@" + this.mDeviceName, "_raop._tcp", "local.", "", port);
++        this.mRaopRegister = new Register(txtRecord, mMacAddress.replace(":", "") + "@" + NAME, "_raop._tcp", "local.", "", port);
+     }
+ 
+     public void stop() {
+         if (mAirplayRegister != null) {
+             mAirplayRegister.stop();
++            mAirplayRegister = null;
+         }
+         if (mRaopRegister != null) {
+             mRaopRegister.stop();
++            mRaopRegister = null;
+         }
+     }
+ 
 diff --git a/app/src/main/java/com/fang/myapplication/MainActivity.java b/app/src/main/java/com/fang/myapplication/MainActivity.java
-index 9c93d12..62a990b 100755
+index 9c93d12..0804289 100755
 --- a/app/src/main/java/com/fang/myapplication/MainActivity.java
 +++ b/app/src/main/java/com/fang/myapplication/MainActivity.java
-@@ -2,6 +2,7 @@ package com.fang.myapplication;
+@@ -2,8 +2,10 @@ package com.fang.myapplication;
  
  import android.app.Activity;
  import android.content.Context;
 +import android.content.Intent;
  import android.os.Bundle;
  import android.util.Log;
++import android.view.KeyEvent;
  import android.view.SurfaceView;
-@@ -14,7 +15,6 @@ public class MainActivity extends Activity implements View.OnClickListener {
+ import android.view.View;
+ import android.widget.Button;
+@@ -13,73 +15,221 @@ import android.widget.Toast;
+ public class MainActivity extends Activity implements View.OnClickListener {
  
      public static String TAG = "MainActivity";
++    private static final String PREFS = "airplay-receiver";
++    private static final String PREF_MODE = "mode";
  
 -    private AirPlayServer mAirPlayServer;
      private RaopServer mRaopServer;
      private DNSNotify mDNSNotify;
  
-@@ -22,61 +22,129 @@ public class MainActivity extends Activity implements View.OnClickListener {
+     private SurfaceView mSurfaceView;
      private Button mBtnControl;
++    private Button mBtnMode;
      private TextView mTxtDevice;
++    private TextView mIdleView;
      private boolean mIsStart = false;
-+    private View mIdleView;
++    private int mMode = RaopServer.MODE_LOW_LATENCY;
++    private volatile boolean mMirroring = false;
 +    private volatile boolean mResumed = false;
 +    private android.net.wifi.WifiManager.WifiLock mWifiLock;
  
@@ -1322,19 +1529,26 @@ index 9c93d12..62a990b 100755
 +            mWifiLock.acquire();
 +        }
          mBtnControl = findViewById(R.id.btn_control);
++        mBtnMode = findViewById(R.id.btn_mode);
          mTxtDevice = findViewById(R.id.txt_device);
++        mIdleView = findViewById(R.id.idle);
          mBtnControl.setOnClickListener(this);
++        mBtnMode.setOnClickListener(this);
          mSurfaceView = findViewById(R.id.surface);
 -        mAirPlayServer = new AirPlayServer();
          mRaopServer = new RaopServer(mSurfaceView);
-+        mIdleView = findViewById(R.id.idle);
++        // The mode survives restarts. adb: am start -n ...MainActivity --es mode low|high
++        mMode = modeFromIntent(getIntent(),
++                getSharedPreferences(PREFS, MODE_PRIVATE).getInt(PREF_MODE, RaopServer.MODE_LOW_LATENCY));
++        mRaopServer.setMode(mMode);
++        updateModeViews();
 +        mRaopServer.setListener(new RaopServer.Listener() {
 +            @Override
-+            public void onMirroringChanged(final boolean active) {
++            public void onMirroringChanged(final boolean active, final int mode) {
 +                runOnUiThread(new Runnable() {
 +                    @Override
 +                    public void run() {
-+                        showMirroring(active);
++                        showMirroring(active, mode);
 +                    }
 +                });
 +            }
@@ -1350,6 +1564,23 @@ index 9c93d12..62a990b 100755
 +        });
 +    }
 +
++    private static int modeFromIntent(Intent intent, int fallback) {
++        String mode = intent == null ? null : intent.getStringExtra("mode");
++        if ("low".equals(mode)) return RaopServer.MODE_LOW_LATENCY;
++        if ("high".equals(mode)) return RaopServer.MODE_HIGH_QUALITY;
++        return fallback;
++    }
++
++    @Override
++    protected void onNewIntent(Intent intent) {
++        super.onNewIntent(intent);
++        setIntent(intent);
++        int mode = modeFromIntent(intent, mMode);
++        if (mode != mMode) {
++            applyMode(mode);
++        }
++    }
++
 +    @Override
 +    protected void onResume() {
 +        super.onResume();
@@ -1362,15 +1593,66 @@ index 9c93d12..62a990b 100755
 +        super.onPause();
 +    }
 +
++    /** The Menu button on the remote switches the mode, also while the picture is full screen and no button is shown. */
++    @Override
++    public boolean onKeyDown(int keyCode, KeyEvent event) {
++        if (keyCode == KeyEvent.KEYCODE_MENU) {
++            switchMode();
++            return true;
++        }
++        return super.onKeyDown(keyCode, event);
++    }
++
++    private static String modeName(int mode) {
++        return mode == RaopServer.MODE_HIGH_QUALITY ? "High quality" : "Low latency";
++    }
++
++    private static String modeDetail(int mode) {
++        return mode == RaopServer.MODE_HIGH_QUALITY
++                ? "1080p, 24 frames a second, smoothed (films)"
++                : "1080p, up to 60 frames a second, no delay (presentations)";
++    }
++
++    private void switchMode() {
++        applyMode(mMode == RaopServer.MODE_LOW_LATENCY ? RaopServer.MODE_HIGH_QUALITY : RaopServer.MODE_LOW_LATENCY);
++    }
++
++    private void applyMode(int mode) {
++        mMode = mode;
++        getSharedPreferences(PREFS, MODE_PRIVATE).edit().putInt(PREF_MODE, mode).apply();
++        mRaopServer.setMode(mode);
++        updateModeViews();
++        if (mMirroring) {
++            // The sender reads the frame rate it may use as a session starts, so the new mode needs a new session.
++            Toast.makeText(getApplicationContext(), modeName(mode) + ": restarting the mirror (a Mac reconnects by itself)",
++                    Toast.LENGTH_LONG).show();
++            mRaopServer.restartSession();
++        } else {
++            Toast.makeText(getApplicationContext(), modeName(mode) + ": " + modeDetail(mode), Toast.LENGTH_SHORT).show();
++        }
++    }
++
++    private void updateModeViews() {
++        mBtnMode.setText("Mode: " + modeName(mMode) + "  (OK to switch)");
++        mIdleView.setText("Ready\nIn Screen Mirroring choose \"" + DNSNotify.NAME + "\"\n\nMode: " + modeName(mMode)
++                + "\n" + modeDetail(mMode) + "\nPress OK on the Mode button, or the Menu button, to switch");
++    }
++
 +    /**
 +     * Mirroring: the picture alone, full screen, and this app in front. Not mirroring: the "Ready" screen with its
-+     * button and the name.
++     * buttons and the name.
 +     */
-+    private void showMirroring(boolean active) {
++    private void showMirroring(boolean active, int mode) {
++        mMirroring = active;
 +        int chrome = active ? View.GONE : View.VISIBLE;
 +        mIdleView.setVisibility(chrome);
 +        mBtnControl.setVisibility(chrome);
++        mBtnMode.setVisibility(chrome);
 +        mTxtDevice.setVisibility(chrome);
++        if (active) {
++            Toast.makeText(getApplicationContext(), modeName(mode) + ": " + modeDetail(mode)
++                    + ". The Menu button switches the mode.", Toast.LENGTH_LONG).show();
++        }
 +        if (!active) {
 +            mBtnControl.requestFocus();
 +        } else if (!mResumed) {
@@ -1398,27 +1680,33 @@ index 9c93d12..62a990b 100755
      public void onClick(View v) {
 -        switch (v.getId()) {
 -            case R.id.btn_control: {
-+        if (v.getId() == R.id.btn_control) {
-+            {
-                 if (!mIsStart) {
-                     startServer();
+-                if (!mIsStart) {
+-                    startServer();
 -                    mTxtDevice.setText("设备名称:" + mDNSNotify.getDeviceName());
-+                    mTxtDevice.setText("AirPlay name: " + mDNSNotify.getDeviceName());
-                 } else {
-                     stopServer();
+-                } else {
+-                    stopServer();
 -                    mTxtDevice.setText("未启动");
-+                    mTxtDevice.setText("Not started");
-                 }
-                 mIsStart = !mIsStart;
+-                }
+-                mIsStart = !mIsStart;
 -                mBtnControl.setText(mIsStart ? "结束" : "开始");
 -                break;
-+                mBtnControl.setText(mIsStart ? "Stop" : "Start");
++        if (v.getId() == R.id.btn_mode) {
++            switchMode();
++        } else if (v.getId() == R.id.btn_control) {
++            if (!mIsStart) {
++                startServer();
++                mTxtDevice.setText("AirPlay name: " + DNSNotify.NAME);
++            } else {
++                stopServer();
++                mTxtDevice.setText("Not started");
              }
++            mIsStart = !mIsStart;
++            mBtnControl.setText(mIsStart ? "Stop" : "Start");
          }
      }
  
      private void startServer() {
-         mDNSNotify.changeDeviceName();
+-        mDNSNotify.changeDeviceName();
 -        mAirPlayServer.startServer();
 -        int airplayPort = mAirPlayServer.getPort();
 -        if (airplayPort == 0) {
@@ -1426,16 +1714,21 @@ index 9c93d12..62a990b 100755
 -        } else {
 -            mDNSNotify.registerAirplay(airplayPort);
 -        }
-+        // One server answers both services, so whichever port the phone picks gets an answer.
-         mRaopServer.startServer();
+-        mRaopServer.startServer();
 -        int raopPort = mRaopServer.getPort();
 -        if (raopPort == 0) {
 -            Toast.makeText(this.getApplicationContext(), "启动raop服务失败", Toast.LENGTH_SHORT).show();
++        // adb: am start ... --es codec h265 offers H.265 to senders, for this run only (an experiment)
++        boolean hevc = "h265".equals(getIntent().getStringExtra("codec"));
++        mDNSNotify.setHevc(hevc);
++        mRaopServer.startServer(mDNSNotify.getDeviceId());
++        mRaopServer.setHevc(hevc);
 +        int port = mRaopServer.getPort();
 +        if (port == 0) {
 +            Toast.makeText(this.getApplicationContext(), "AirPlay service failed to start", Toast.LENGTH_SHORT).show();
          } else {
 -            mDNSNotify.registerRaop(raopPort);
++            // One server answers both of its services, so whichever port the phone picks gets an answer.
 +            mDNSNotify.registerAirplay(port);
 +            mDNSNotify.registerRaop(port);
          }
@@ -1449,8 +1742,11 @@ index 9c93d12..62a990b 100755
          mRaopServer.stopServer();
      }
  
+ }
+-
+-
 diff --git a/app/src/main/java/com/fang/myapplication/RaopServer.java b/app/src/main/java/com/fang/myapplication/RaopServer.java
-index 93448da..6f26ea5 100755
+index 93448da..0df2573 100755
 --- a/app/src/main/java/com/fang/myapplication/RaopServer.java
 +++ b/app/src/main/java/com/fang/myapplication/RaopServer.java
 @@ -3,6 +3,8 @@ package com.fang.myapplication;
@@ -1462,13 +1758,17 @@ index 93448da..6f26ea5 100755
  
  import com.fang.myapplication.model.NALPacket;
  import com.fang.myapplication.model.PCMPacket;
-@@ -11,25 +13,83 @@ import com.fang.myapplication.player.VideoPlayer;
+@@ -11,40 +13,134 @@ import com.fang.myapplication.player.VideoPlayer;
  
  public class RaopServer implements SurfaceHolder.Callback {
  
++    /** The two modes (see CONTEXT.md): what the receiver offers the sender, and how it plays what arrives. */
++    public static final int MODE_LOW_LATENCY = 1;
++    public static final int MODE_HIGH_QUALITY = 2;
++
 +    /** Told when a mirroring session starts (true) and ends (false); called from a native thread. */
 +    public interface Listener {
-+        void onMirroringChanged(boolean active);
++        void onMirroringChanged(boolean active, int mode);
 +    }
 +
      static {
@@ -1484,6 +1784,7 @@ index 93448da..6f26ea5 100755
 +    private final SurfaceView mSurfaceView;
 +    private volatile Listener mListener;
      private long mServerId = 0;
++    private volatile int mMode = MODE_LOW_LATENCY;
 +    /** A mirroring session is on screen: set by its first frame, cleared when the native side says it ended. */
 +    private volatile boolean mActive = false;
 +
@@ -1493,10 +1794,7 @@ index 93448da..6f26ea5 100755
 +        public void onNeedNewSession() {
 +            // The picture cannot be recovered (a Mac sends one keyframe per session): end the session, and the
 +            // sender starts a new one. A Mac does so by itself; an iPhone needs Screen Mirroring chosen again.
-+            long id = mServerId;
-+            if (id != 0) {
-+                endSession(id);
-+            }
++            restartSession();
 +        }
 +
 +        @Override
@@ -1534,10 +1832,35 @@ index 93448da..6f26ea5 100755
 +    private void notifyMirroring(boolean active) {
 +        Listener listener = mListener;
 +        if (listener != null) {
-+            listener.onMirroringChanged(active);
++            listener.onMirroringChanged(active, mMode);
 +        }
++    }
++
++    /**
++     * Switches between low latency and high quality. The players change at once (a delay of a quarter of a second in
++     * high quality); what the receiver offers the sender (the frame rate) is read by the sender as a session starts,
++     * so it applies to the next session: the caller restarts the current one, if any, with restartSession().
++     */
++    public void setMode(int mode) {
++        mMode = mode;
++        mVideoPlayer.setMode(mode);
++        mAudioPlayer.setMode(mode);
++        if (mServerId != 0) {
++            setMode(mServerId, mode);
++        }
++    }
++
++    public int getMode() {
++        return mMode;
      }
  
++    /** Ends the current session, so the sender starts a new one (a Mac does so by itself; an iPhone needs choosing again). */
++    public void restartSession() {
++        if (mServerId != 0) {
++            endSession(mServerId);
++        }
++    }
++
 +    // Called from native threads.
      public void onRecvVideoData(byte[] nal, int nalType, long dts, long pts) {
 -        Log.d(TAG, "onRecvVideoData pts = " + pts + ", nalType = " + nalType + ", nal length = " + nal.length);
@@ -1550,7 +1873,9 @@ index 93448da..6f26ea5 100755
          NALPacket nalPacket = new NALPacket();
          nalPacket.nalData = nal;
          nalPacket.nalType = nalType;
-@@ -38,13 +98,21 @@ public class RaopServer implements SurfaceHolder.Callback {
+         nalPacket.pts = pts;
++        nalPacket.arrivalNs = System.nanoTime();
+         mVideoPlayer.addPacker(nalPacket);
      }
  
      public void onRecvAudioData(short[] pcm, long pts) {
@@ -1573,7 +1898,7 @@ index 93448da..6f26ea5 100755
      @Override
      public void surfaceCreated(SurfaceHolder holder) {
  
-@@ -52,15 +120,13 @@ public class RaopServer implements SurfaceHolder.Callback {
+@@ -52,29 +148,42 @@ public class RaopServer implements SurfaceHolder.Callback {
  
      @Override
      public void surfaceChanged(SurfaceHolder holder, int format, int width, int height) {
@@ -1591,8 +1916,13 @@ index 93448da..6f26ea5 100755
 +        mVideoPlayer.setSurface(null);
      }
  
-     public void startServer() {
-@@ -70,11 +136,25 @@ public class RaopServer implements SurfaceHolder.Callback {
+-    public void startServer() {
++    /** @param deviceId what /info reports as the device id: the same one the mDNS records carry */
++    public void startServer(String deviceId) {
+         if (mServerId == 0) {
+-            mServerId = start();
++            mServerId = start(mMode, deviceId);
+         }
      }
  
      public void stopServer() {
@@ -1621,17 +1951,41 @@ index 93448da..6f26ea5 100755
      }
  
      public int getPort() {
-@@ -87,4 +167,5 @@ public class RaopServer implements SurfaceHolder.Callback {
-     private native long start();
+@@ -84,7 +193,17 @@ public class RaopServer implements SurfaceHolder.Callback {
+         return 0;
+     }
+ 
+-    private native long start();
++    private native long start(int mode, String deviceId);
      private native void stop(long serverId);
      private native int getPort(long serverId);
 +    private native void endSession(long serverId);
++    private native void setMode(long serverId, int mode);
++    private native void setHevc(long serverId, int enabled);
++
++    /** Offer H.265 (an experiment, see CONTEXT.md): call after startServer. */
++    public void setHevc(boolean enabled) {
++        if (mServerId != 0) {
++            setHevc(mServerId, enabled ? 1 : 0);
++        }
++    }
+ }
+diff --git a/app/src/main/java/com/fang/myapplication/model/NALPacket.java b/app/src/main/java/com/fang/myapplication/model/NALPacket.java
+index 5a8a0ee..52f613e 100755
+--- a/app/src/main/java/com/fang/myapplication/model/NALPacket.java
++++ b/app/src/main/java/com/fang/myapplication/model/NALPacket.java
+@@ -4,4 +4,6 @@ public class NALPacket {
+     public byte[] nalData = null;
+     public int nalType = 0;
+     public long pts = 0;
++    /** When the packet reached this app, in System.nanoTime(): what the high quality mode paces the playback from. */
++    public long arrivalNs = 0;
  }
 diff --git a/app/src/main/java/com/fang/myapplication/player/AudioPlayer.java b/app/src/main/java/com/fang/myapplication/player/AudioPlayer.java
-index 7175e45..90de7d0 100755
+index 7175e45..be4dcd5 100755
 --- a/app/src/main/java/com/fang/myapplication/player/AudioPlayer.java
 +++ b/app/src/main/java/com/fang/myapplication/player/AudioPlayer.java
-@@ -3,55 +3,88 @@ package com.fang.myapplication.player;
+@@ -3,55 +3,120 @@ package com.fang.myapplication.player;
  import android.media.AudioFormat;
  import android.media.AudioManager;
  import android.media.AudioTrack;
@@ -1649,6 +2003,18 @@ index 7175e45..90de7d0 100755
  
 +    private static final String TAG = "AudioPlayer";
 +
++    /**
++     * The phone sends its first second or so of sound ahead of time: playing all of it would keep the sound that
++     * much behind the picture, so only a short queue is kept and the oldest packets go. Low latency keeps about
++     * 65 ms (a packet is 480 frames, about 11 ms).
++     */
++    private static final int LOW_LATENCY_QUEUE = 6;
++    /**
++     * High quality plays from a cushion of about 55 ms, rebuilt after any gap, so the network's jitter cannot make
++     * the sound break up. With the audio track's own buffer that is about the delay the picture is held back by.
++     */
++    private static final int HIGH_QUALITY_CUSHION = 5;
++
      private AudioTrack mTrack;
 -    private int mChannel = AudioFormat.CHANNEL_OUT_STEREO;
 -    private int mSampleRate = 44100;
@@ -1660,6 +2026,9 @@ index 7175e45..90de7d0 100755
 +    private final int mAudioFormat = AudioFormat.ENCODING_PCM_16BIT;
 +    private volatile boolean isStopThread = false;
 +    private final LinkedBlockingQueue<PCMPacket> mQueue = new LinkedBlockingQueue<PCMPacket>();
++    private volatile int mMaxQueued = LOW_LATENCY_QUEUE;
++    private volatile int mCushion = 0;
++    private volatile boolean mRebuffer = false;
 +
 +    private long mStatsAt = 0;
 +    private int mPackets = 0;
@@ -1676,16 +2045,19 @@ index 7175e45..90de7d0 100755
 +                buffer, AudioTrack.MODE_STREAM);
 +        mTrack.play();
 +        Log.i(TAG, "audio track ready, state " + mTrack.getState() + ", buffer " + buffer);
++    }
++
++    /** Low latency (and balanced): play at once. High quality (2): play from a small cushion. */
++    public void setMode(int mode) {
++        mCushion = mode == 2 ? HIGH_QUALITY_CUSHION : 0;
++        mMaxQueued = mode == 2 ? HIGH_QUALITY_CUSHION + 4 : LOW_LATENCY_QUEUE;
++        mRebuffer = mCushion > 0;
      }
  
-+    /** The phone sends its first second or so of sound ahead of time: playing all of it would keep the
-+     *  sound that much behind the picture, so only a short queue is kept and the oldest packets go. */
-+    private static final int MAX_QUEUED = 6; // about 65 ms
-+
      public void addPacker(PCMPacket pcmPacket) {
 -        mListBuffer.add(pcmPacket);
 +        mQueue.add(pcmPacket);
-+        while (mQueue.size() > MAX_QUEUED) {
++        while (mQueue.size() > mMaxQueued) {
 +            mQueue.poll();
 +            mDropped++;
 +        }
@@ -1701,21 +2073,34 @@ index 7175e45..90de7d0 100755
 -                } catch (InterruptedException e) {
 -                    e.printStackTrace();
 +            try {
-+                PCMPacket packet = mQueue.poll(50, TimeUnit.MILLISECONDS);
-+                if (packet != null && mTrack != null) {
-+                    mTrack.write(packet.data, 0, packet.data.length);
-+                    mPackets++;
-+                    mTotalPackets++;
++                if (mRebuffer && mCushion > 0) {
++                    // fill the cushion before playing, but never wait more than a second for it
++                    long start = System.currentTimeMillis();
++                    while (mQueue.size() < mCushion && System.currentTimeMillis() - start < 1000 && !isStopThread) {
++                        Thread.sleep(5);
++                    }
++                    mRebuffer = false;
                  }
 -            } else {
 -                doPlay(mListBuffer.remove(0));
++                PCMPacket packet = mQueue.poll(50, TimeUnit.MILLISECONDS);
++                if (packet == null) {
++                    if (mCushion > 0) {
++                        mRebuffer = true; // ran dry: build the cushion again
++                    }
++                } else if (mTrack != null) {
++                    mTrack.write(packet.data, 0, packet.data.length);
++                    mPackets++;
++                    mTotalPackets++;
++                }
 +            } catch (InterruptedException e) {
 +                break;
 +            }
 +            long now = System.currentTimeMillis();
 +            if (now - mStatsAt >= 1000) {
 +                if (mStatsAt != 0 && mPackets > 0) {
-+                    Log.i(TAG, "audio: " + mPackets + " packets/s (total " + mTotalPackets + "), queued " + mQueue.size() + ", dropped so far " + mDropped);
++                    Log.i(TAG, "audio: " + mPackets + " packets/s (total " + mTotalPackets + "), queued "
++                            + mQueue.size() + ", dropped so far " + mDropped);
 +                }
 +                mStatsAt = now;
 +                mPackets = 0;
@@ -1729,6 +2114,7 @@ index 7175e45..90de7d0 100755
 +    /** Throw away what is queued and what is buffered in the track: the stream they belonged to is over. */
 +    public void flush() {
 +        mQueue.clear();
++        mRebuffer = mCushion > 0;
 +        AudioTrack track = mTrack;
 +        if (track == null) return;
 +        try {
@@ -1744,17 +2130,17 @@ index 7175e45..90de7d0 100755
      public void stopPlay() {
          isStopThread = true;
          interrupt();
-@@ -62,5 +95,4 @@ public class AudioPlayer extends Thread {
+@@ -62,5 +127,4 @@ public class AudioPlayer extends Thread {
              mTrack = null;
          }
      }
 -
  }
 diff --git a/app/src/main/java/com/fang/myapplication/player/VideoPlayer.java b/app/src/main/java/com/fang/myapplication/player/VideoPlayer.java
-index 6502bac..0a1361a 100755
+index 6502bac..f4baea8 100755
 --- a/app/src/main/java/com/fang/myapplication/player/VideoPlayer.java
 +++ b/app/src/main/java/com/fang/myapplication/player/VideoPlayer.java
-@@ -7,105 +7,407 @@ import android.view.Surface;
+@@ -7,105 +7,467 @@ import android.view.Surface;
  
  import com.fang.myapplication.model.NALPacket;
  
@@ -1797,21 +2183,17 @@ index 6502bac..0a1361a 100755
 +    private static final long NEW_SESSION_BACKOFF_MS = 20000;
 +    /** After the decoder fails to start, wait this long before trying again. */
 +    private static final long RETRY_MS = 500;
++    /** High quality: how long a frame is held back, so the network's jitter cannot make the playback uneven. */
++    private static final int HIGH_QUALITY_DELAY_MS = 250;
++    /** A frame this much later than its schedule means the stream stalled: start the schedule again. */
++    private static final long LATE_NS = 400000000L;
 +
 +    // Markers put in the queue, so they are handled in order with the frames around them.
 +    private static final int KIND_CONFIG = 0;
 +    private static final int KIND_SESSION_START = -1;
 +    private static final int KIND_SESSION_END = -2;
 +    private static final int KIND_LOST = -3;
- 
--    private String mMimeType = "video/avc";
--    private int mVideoWidth  = 540;
--    private int mVideoHeight = 960;
--    private MediaCodec.BufferInfo mBufferInfo = new MediaCodec.BufferInfo();
--    private MediaCodec mDecoder = null;
--    private Surface mSurface = null;
--    private boolean mIsEnd = false;
--    private List<NALPacket> mListBuffer = Collections.synchronizedList(new ArrayList<NALPacket>());
++
 +    private final Callbacks mCallbacks;
 +    private final LinkedBlockingQueue<NALPacket> mQueue = new LinkedBlockingQueue<NALPacket>();
 +    private final MediaCodec.BufferInfo mInfo = new MediaCodec.BufferInfo();
@@ -1828,6 +2210,9 @@ index 6502bac..0a1361a 100755
 +    private long mRetryAt = 0;
 +    private long mNewSessionAskedAt = 0;
 +    private long mLastKeyframeAt = 0;
++    private volatile int mDelayMs = 0;                    // 0: decode and show each frame as it arrives
++    private volatile long mPaceBaseNs = Long.MIN_VALUE;   // arrival time minus the sender's time, of the quickest frame
++    private int mPaceLogged = 0;
 +    private final ArrayList<NALPacket> mPending = new ArrayList<NALPacket>();
 +    private int mPendingBytes = 0;
 +
@@ -1838,6 +2223,23 @@ index 6502bac..0a1361a 100755
 +
 +    public VideoPlayer(Callbacks callbacks) {
 +        mCallbacks = callbacks;
++    }
+ 
+-    private String mMimeType = "video/avc";
+-    private int mVideoWidth  = 540;
+-    private int mVideoHeight = 960;
+-    private MediaCodec.BufferInfo mBufferInfo = new MediaCodec.BufferInfo();
+-    private MediaCodec mDecoder = null;
+-    private Surface mSurface = null;
+-    private boolean mIsEnd = false;
+-    private List<NALPacket> mListBuffer = Collections.synchronizedList(new ArrayList<NALPacket>());
++    /**
++     * Low latency (and balanced): decode and show each frame the moment it arrives. High quality (2): hold each
++     * frame back a quarter of a second, on the sender's own schedule, so the playback is even.
++     */
++    public void setMode(int mode) {
++        mDelayMs = mode == 2 ? HIGH_QUALITY_DELAY_MS : 0;
++        mPaceBaseNs = Long.MIN_VALUE;
 +    }
  
 -    public VideoPlayer(Surface surface) {
@@ -1917,8 +2319,7 @@ index 6502bac..0a1361a 100755
 +                startFromPending();
 +                if (packet != null) {
 +                    handle(packet);
-                 }
--                continue;
++                }
 +                drain();
 +            } catch (InterruptedException e) {
 +                break;
@@ -1928,14 +2329,13 @@ index 6502bac..0a1361a 100755
 +                releaseDecoder();
 +                mNeedKeyframe = true;
 +                mRetryAt = System.currentTimeMillis() + RETRY_MS;
-             }
--            doDecode(mListBuffer.remove(0));
++            }
 +            logStats();
 +        }
 +        releaseDecoder();
 +    }
 +
-+    private void handle(NALPacket packet) {
++    private void handle(NALPacket packet) throws InterruptedException {
 +        switch (packet.nalType) {
 +            case KIND_SESSION_START:
 +            case KIND_SESSION_END:
@@ -1946,6 +2346,8 @@ index 6502bac..0a1361a 100755
 +                mKeyframeWaitSince = 0;
 +                mNewSessionAskedAt = 0;
 +                mLastKeyframeAt = 0;
++                mPaceBaseNs = Long.MIN_VALUE;
++                mPaceLogged = 0;
 +                return;
 +            case KIND_LOST:
 +                releaseDecoder();
@@ -1979,7 +2381,8 @@ index 6502bac..0a1361a 100755
 +                }
 +                if (now - mKeyframeWaitSince > KEYFRAME_WAIT_MS) {
 +                    askForNewSession();
-+                }
+                 }
+-                continue;
 +                return;
 +            }
 +            mNeedKeyframe = false;
@@ -1989,17 +2392,64 @@ index 6502bac..0a1361a 100755
 +            if (System.currentTimeMillis() < mRetryAt) {
 +                mNeedKeyframe = true;
 +                return;
-+            }
+             }
+-            doDecode(mListBuffer.remove(0));
 +            createDecoder(surface);
-+        }
+         }
++        pace(packet);
 +        feed(packet.nalData, packet.pts);
+     }
+ 
+-    private void doDecode(NALPacket nalPacket) {
+-        final int TIMEOUT_USEC = 10000;
+-        ByteBuffer[] decoderInputBuffers = mDecoder.getInputBuffers();
+-        int inputBufIndex = -10000;
++    /**
++     * High quality: wait until this frame's turn, which is the sender's own timestamp for it plus a fixed delay,
++     * showing what is already decoded meanwhile. A burst of frames after a slow moment then comes out evenly, as
++     * long as the stream was not late by more than the delay. The schedule is measured from when frames ARRIVED
++     * (not from when the decoder got to them, which includes starting up), taking the quickest frame so far as the
++     * reference: a frame's delay is then how much later than the quickest one it came.
++     */
++    private void pace(NALPacket packet) throws InterruptedException {
++        long delayNs = mDelayMs * 1000000L;
++        if (delayNs <= 0) {
++            return;
++        }
++        long ptsUs = packet.pts;
++        long offset = packet.arrivalNs - ptsUs * 1000L;
++        long base = mPaceBaseNs;
++        if (base == Long.MIN_VALUE || offset < base) {
++            base = offset;
++            mPaceBaseNs = base;
++        }
++        long now = System.nanoTime();
++        long due = base + ptsUs * 1000L + delayNs;
++        if (now - due > LATE_NS || due - now > 3000000000L) {
++            // The stream stalled, or the sender's clock jumped: start the schedule again from this frame.
++            mPaceBaseNs = offset;
++            due = packet.arrivalNs + delayNs;
++        }
++        if (mPaceLogged < 3) {
++            mPaceLogged++;
++            Log.i(TAG, "pace: frame at " + (ptsUs / 1000) + " ms of the stream, shown in "
++                    + Math.max(0, (due - now) / 1000000L) + " ms");
++        }
++        while (!mIsEnd) {
++            long left = due - System.nanoTime();
++            if (left <= 0) {
++                break;
++            }
++            drain();
++            Thread.sleep(left > 4000000L ? 4 : 1);
++        }
 +    }
 +
 +    private void askForNewSession() {
 +        long now = System.currentTimeMillis();
 +        if (mNewSessionAskedAt != 0 && now - mNewSessionAskedAt < NEW_SESSION_BACKOFF_MS) {
 +            return;
-         }
++        }
 +        mNewSessionAskedAt = now;
 +        Log.w(TAG, "no keyframe for " + KEYFRAME_WAIT_MS + " ms: asking for a new session");
 +        if (mCallbacks != null) {
@@ -2031,12 +2481,8 @@ index 6502bac..0a1361a 100755
 +        }
 +        mPending.add(packet);
 +        mPendingBytes += packet.nalData.length;
-     }
- 
--    private void doDecode(NALPacket nalPacket) {
--        final int TIMEOUT_USEC = 10000;
--        ByteBuffer[] decoderInputBuffers = mDecoder.getInputBuffers();
--        int inputBufIndex = -10000;
++    }
++
 +    /** A surface has appeared and frames were held: start the decoder from the held keyframe and catch up. */
 +    private void startFromPending() {
 +        Surface surface = mSurface;
@@ -2086,14 +2532,14 @@ index 6502bac..0a1361a 100755
 +        } catch (RuntimeException e) {
 +            codec.release();
 +            throw e;
-         }
++        }
 +        mDecoder = codec;
 +        mDecoderSurface = surface;
 +        Log.i(TAG, "decoder started: " + codec.getName());
 +        byte[] config = mConfig;
 +        if (config != null) {
 +            feed(config, 0);
-+        }
+         }
 +    }
  
 -        int outputBufferIndex = -10000;
@@ -2229,10 +2675,10 @@ index 6502bac..0a1361a 100755
      }
  }
 diff --git a/app/src/main/res/layout/activity_main.xml b/app/src/main/res/layout/activity_main.xml
-index a48f644..2ecf3c7 100755
+index a48f644..0328654 100755
 --- a/app/src/main/res/layout/activity_main.xml
 +++ b/app/src/main/res/layout/activity_main.xml
-@@ -4,22 +4,32 @@
+@@ -4,22 +4,39 @@
      android:layout_width="match_parent"
      android:layout_height="match_parent"
      tools:context=".MainActivity"
@@ -2248,7 +2694,7 @@ index a48f644..2ecf3c7 100755
 +        android:layout_height="match_parent"
 +        android:background="#000000"
 +        android:gravity="center"
-+        android:text="Ready&#10;Choose Fire Stick in Screen Mirroring on your iPhone, iPad or Mac"
++        android:text="Ready"
 +        android:textColor="#ffffff"
 +        android:textSize="28sp" />
      <Button
@@ -2258,6 +2704,13 @@ index a48f644..2ecf3c7 100755
 -        android:text="开始"
 +        android:text="Start"
          android:layout_marginLeft="15dp"/>
++    <Button
++        android:id="@+id/btn_mode"
++        android:layout_width="wrap_content"
++        android:layout_height="wrap_content"
++        android:layout_below="@id/btn_control"
++        android:layout_marginLeft="15dp"
++        android:text="Mode" />
      <TextView
          android:id="@+id/txt_device"
          android:layout_width="wrap_content"

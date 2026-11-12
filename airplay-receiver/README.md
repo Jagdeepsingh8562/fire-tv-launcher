@@ -36,6 +36,18 @@ Screen Mirroring, **Fire Stick**. Play something with sound.
 If "Fire Stick" stops appearing in the iPhone's list after the TV has been idle for a long time, close the app and
 open it again: its network registration can silently drop.
 
+## Modes: low latency and high quality
+
+One AirPlay name, "Fire Stick", with a mode you switch on the TV: the **Mode** button on the "Ready" screen (OK), or
+the remote's **Menu** button at any time, also while mirroring. The mode is remembered. Low latency (for
+presentations) asks the sender for 1920x1080 at up to 60 frames a second and shows each frame as soon as it is
+decoded; high quality (for films) asks for 1920x1080 at 24 frames a second and holds frames back a quarter of a second
+so the playback is even. The sender reads the frame rate as a session starts, so switching while mirroring restarts the
+session (a Mac reconnects by itself; an iPhone needs Screen Mirroring chosen again). The bitrate is still the
+sender's choice: in one rough comparison with a Mac, 24 fps got about the same total bitrate and about 16% more bits
+per frame. `adb shell am start -n com.fang.myapplication/.MainActivity --es mode low` (or `high`) sets it from
+a computer.
+
 ## Picture quality
 
 The receiver shows exactly what the Mac or iPhone sends, at 1920x1080 and 30 frames per second at most. How good that
