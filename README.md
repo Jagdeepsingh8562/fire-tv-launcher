@@ -158,8 +158,8 @@ This repo has two receivers for the stick on Android 5.1, each a patch (so no up
   open.
 
 ```bash
-airplay-receiver-uxplay/build.sh        # about 6 minutes the first time, builds outside the repo (needs a path without spaces)
-adb install -r airplay-receiver-uxplay/build/airplay-receiver-uxplay.apk
+adb install -r airplay-receiver-uxplay/airplay-receiver-uxplay.apk        # the prebuilt APK, 4.7 MB
+airplay-receiver-uxplay/build.sh        # or build it: about 6 minutes the first time, outside the repo (path without spaces)
 ```
 
 Open the app on the TV once, then pick **Android AirPlay** in Screen Mirroring, or press the cast button in a video

@@ -8,10 +8,23 @@ receiver for Android and Android TV built on [UxPlay](https://github.com/FDH2/Ux
 The upstream project needs Android 6; the patch makes it run on the stick. `build.sh` clones upstream at the commit
 the patch was made against, applies the patch and builds the APK.
 
+A prebuilt, debug-signed APK is in this folder:
+
 ```bash
-airplay-receiver-uxplay/build.sh                                       # about 6 minutes the first time
-adb install -r airplay-receiver-uxplay/build/airplay-receiver-uxplay.apk
+adb install -r airplay-receiver-uxplay/airplay-receiver-uxplay.apk
 adb shell am start -n io.github.jqssun.airplay/.MainActivity           # "Android AirPlay" in the app list
+```
+
+It is 4.7 MB, 32-bit ARM only, SHA-256 `ec18d77b0cf21056fef090e718616a2a70ae563e36fb3eeb68e9cd413e844129`. It is what
+`build.sh` makes from a clean start (every file inside it matches the build that was tested on the stick). Its source
+is the upstream commit named in `build.sh` plus `airplay-receiver-uxplay.patch` in this folder; the licence text is in
+`LICENSE` here (GPL-3.0).
+
+To build it yourself instead (about 6 minutes the first time; the result lands in `build/`):
+
+```bash
+airplay-receiver-uxplay/build.sh
+adb install -r airplay-receiver-uxplay/build/airplay-receiver-uxplay.apk
 ```
 
 You need git, JDK 17 or newer, perl and the Android SDK with `ndk;27.0.12077973`, `cmake;3.22.1` and
