@@ -35,6 +35,7 @@ step with screenshots from the TV. If you'd rather do it by hand, the pieces are
 | [`tools/b64push.py`](tools/b64push.py) | Uploads larger files (APKs) as base64 chunks with an md5 check. |
 | [`tools/disable.sh`](tools/disable.sh), [`tools/restore.sh`](tools/restore.sh) | Apply or undo a debloat list. |
 | [`airplay-receiver/`](airplay-receiver/) | AirPlay screen mirroring to a Fire TV Stick on Fire OS 5: a patch for an old open-source receiver, and `build.sh` to make the APK. |
+| [`airplay-receiver-uxplay/`](airplay-receiver-uxplay/) | AirPlay mirroring **and video casting** to a Fire TV Stick on Fire OS 5: a patch that makes a current open-source receiver run on Android 5, and `build.sh` to make the APK. |
 | [`examples/`](examples/) | Per-TV debloat lists. Add yours, see [CONTRIBUTING.md](CONTRIBUTING.md). |
 
 ## The launcher
@@ -142,22 +143,29 @@ start off again.
 
 ## AirPlay receiver (Fire TV)
 
-A Fire TV Stick has no AirPlay of its own, and the current open-source receivers need Android 6 or newer (their
-screens are built with a toolkit that calls an Android 6 function the moment they start, so they crash on Fire OS 5).
-[`airplay-receiver/`](airplay-receiver/) mirrors an iPhone, iPad or Mac to a stick on Android 5.1, with sound, in
-Control Center's **Screen Mirroring** list as **Fire Stick**. It is
-[KqSMea8/AirplayServer](https://github.com/KqSMea8/AirplayServer) (a 2019 project with no licence, so not copied
-here) with a patch of ours that makes it build today, accept more than one connection, keep the sound with the
-picture and stop hanging apps that ask for video casting:
+A Fire TV Stick has no AirPlay of its own, and the current open-source receivers need Android 6 or newer: their
+screens are built with a toolkit that calls an Android 6 function the moment they start, so they crash on Fire OS 5.
+This repo has two receivers for the stick on Android 5.1, each a patch (so no upstream code is copied here) and a
+`build.sh` that clones upstream at a pinned commit, applies the patch and builds the APK:
+
+- [`airplay-receiver-uxplay/`](airplay-receiver-uxplay/) is
+  [jqssun/android-airplay-server](https://github.com/jqssun/android-airplay-server) (GPL-3.0, built on UxPlay) with a
+  patch that makes it run on Android 5. It mirrors an iPhone, iPad or Mac **and plays what an app's cast button
+  sends** (YouTube's, say) in the original quality, in the AirPlay list as **Android AirPlay**. This is the one to
+  use.
+- [`airplay-receiver/`](airplay-receiver/) is the earlier one: [KqSMea8/AirplayServer](https://github.com/KqSMea8/AirplayServer),
+  a 2019 project with no licence, plus a patch of ours. It mirrors only, as **Fire Stick**, and only while its app is
+  open.
 
 ```bash
-airplay-receiver/build.sh        # clones upstream at a pinned commit, applies the patch, builds with the launcher's Gradle
-adb install -r airplay-receiver/build/airplay-receiver.apk
+airplay-receiver-uxplay/build.sh        # about 6 minutes the first time, builds outside the repo (needs a path without spaces)
+adb install -r airplay-receiver-uxplay/build/airplay-receiver-uxplay.apk
 ```
 
-Open the app on the TV, then pick **Fire Stick** in Screen Mirroring. It only draws while its app is open, it has no
-password, and an app's own cast button (YouTube's, say) does not work: mirror the screen and play the video on the
-phone. Details, limits and what the patch changes are in [`airplay-receiver/README.md`](airplay-receiver/README.md).
+Open the app on the TV once, then pick **Android AirPlay** in Screen Mirroring, or press the cast button in a video
+app. Details, what was tested and what was not, and what the patch changes are in
+[`airplay-receiver-uxplay/README.md`](airplay-receiver-uxplay/README.md) and
+[`airplay-receiver/README.md`](airplay-receiver/README.md). Installing both makes the stick show up twice.
 
 ## Talking to the TV by hand
 
@@ -235,5 +243,6 @@ Add your TV's debloat list, improve the launcher, or sharpen the prompt. See
 
 ## Licence
 
-MIT, see [`LICENSE`](LICENSE). The Outfit and Open Sans typefaces are under the SIL Open Font
+MIT, see [`LICENSE`](LICENSE), except the patch in `airplay-receiver-uxplay/`, which modifies GPL-3.0 code and is
+GPL-3.0. The Outfit and Open Sans typefaces are under the SIL Open Font
 License, see `launcher/FONT-LICENSE-OFL.txt`. Credits are in [`CREDITS.md`](CREDITS.md).

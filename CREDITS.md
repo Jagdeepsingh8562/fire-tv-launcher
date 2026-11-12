@@ -35,6 +35,11 @@ AirPlay handling, Apple's mDNSResponder, Fraunhofer's FDK AAC and others) under 
 ours, a derivative of that code, and is shared only as a patch. Not affiliated with or endorsed by Apple; "AirPlay"
 is Apple's trademark.
 
+[jqssun/android-airplay-server](https://github.com/jqssun/android-airplay-server) (GPL-3.0) is the receiver behind
+`airplay-receiver-uxplay/`, built on [UxPlay](https://github.com/FDH2/UxPlay) (GPL-3.0) with FFmpeg, OpenSSL and
+others under their own licences. `airplay-receiver-uxplay/build.sh` clones it at the commit our patch was made
+against; the patch is a modification of GPL-3.0 code and is GPL-3.0 as well.
+
 ## Logos
 
 The dock icons for YouTube, Netflix, Prime Video and AirPlay are trademarks of their owners and are not in

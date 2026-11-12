@@ -30,3 +30,4 @@ launcher/app/src/main/assets/ps5/
 
 # AirPlay receiver: the upstream clone and APK that airplay-receiver/build.sh makes
 airplay-receiver/build/
+airplay-receiver-uxplay/build/
