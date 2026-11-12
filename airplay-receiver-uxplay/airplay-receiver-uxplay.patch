@@ -1,0 +1,450 @@
+diff --git a/app/build.gradle.kts b/app/build.gradle.kts
+index 2f56e62..55da6ef 100644
+--- a/app/build.gradle.kts
++++ b/app/build.gradle.kts
+@@ -11,7 +11,7 @@ val localProps = Properties().apply {
+     rootProject.file("local.properties").takeIf { it.exists() }?.inputStream()?.use(::load)
+ }
+ 
+-val allAbis = listOf("arm64-v8a", "armeabi-v7a", "x86_64")
++val allAbis = listOf("armeabi-v7a") // Fire TV Stick (MT8127) is 32-bit ARM
+ 
+ android {
+     namespace = "io.github.jqssun.airplay"
+@@ -31,7 +31,7 @@ android {
+ 
+     defaultConfig {
+         applicationId = "io.github.jqssun.airplay"
+-        minSdk = 23
++        minSdk = 22
+         targetSdk = 37
+         versionCode = 36
+         versionName = "0.0.36"
+@@ -57,7 +57,7 @@ android {
+         release {
+             isMinifyEnabled = true
+             proguardFiles(getDefaultProguardFile("proguard-android-optimize.txt"), "proguard-rules.pro")
+-            signingConfigs.findByName("release")?.let { signingConfig = it }
++            signingConfig = signingConfigs.findByName("release") ?: signingConfigs.getByName("debug")
+             ndk { abiFilters += allAbis }
+         }
+         // debuggable build with HWASan (arm64) + UBSan in native code
+@@ -84,6 +84,12 @@ android {
+         targetCompatibility = JavaVersion.VERSION_17
+     }
+ 
++    lint {
++        // release lint stops the build on API-23 findings we handle at run time
++        checkReleaseBuilds = false
++        abortOnError = false
++    }
++
+     buildFeatures {
+         compose = true
+         prefab = true
+@@ -121,7 +127,6 @@ dependencies {
+     implementation(libs.androidx.media)
+     implementation(libs.media3.exoplayer)
+     implementation(libs.media3.exoplayer.hls)
+-    implementation(libs.media3.ui.compose.material3)
+     implementation(libs.media3.transformer)
+     implementation(libs.kotlinx.coroutines)
+     implementation(libs.oboe)
+diff --git a/app/src/main/cpp/CMakeLists.txt b/app/src/main/cpp/CMakeLists.txt
+index 4787360..486440e 100644
+--- a/app/src/main/cpp/CMakeLists.txt
++++ b/app/src/main/cpp/CMakeLists.txt
+@@ -17,6 +17,10 @@ string(REGEX MATCH "[0-9]+" AIRPLAY_ANDROID_API "${ANDROID_PLATFORM}")
+ set(OPENSSL_PARAMS "-D__ANDROID_API__=${AIRPLAY_ANDROID_API}" CACHE STRING "" FORCE)
+ set(FORWARD_ANDROID_NDK_ROOT "${ANDROID_NDK}" CACHE STRING "" FORCE) # CI
+ 
++# Android 5 loads the system's own libcrypto.so into every process and that one wins over a bundled
++# libcrypto.so of the same name (missing OpenSSL 3 symbols at load time), so link OpenSSL statically
++set(OPENSSL_USE_STATIC_LIBS ON CACHE STRING "" FORCE)
++
+ list(PREPEND CMAKE_MODULE_PATH ${CMAKE_CURRENT_SOURCE_DIR}/cmake)
+ add_subdirectory(third_party/openssl-cmake)
+ 
+@@ -143,7 +147,8 @@ target_compile_definitions(airplay_native PRIVATE
+     TARGET_RT_LITTLE_ENDIAN=1
+ )
+ 
+-target_link_options(airplay_native PRIVATE "-Wl,--build-id=none")
++# keep the static OpenSSL symbols private so they cannot be replaced by the system libcrypto
++target_link_options(airplay_native PRIVATE "-Wl,--build-id=none" "-Wl,--exclude-libs,ALL")
+ 
+ target_link_libraries(airplay_native
+     llhttp
+diff --git a/app/src/main/cpp/android_raop_callbacks.c b/app/src/main/cpp/android_raop_callbacks.c
+index 1d3257f..3295e2b 100644
+--- a/app/src/main/cpp/android_raop_callbacks.c
++++ b/app/src/main/cpp/android_raop_callbacks.c
+@@ -3,6 +3,7 @@
+  * All callbacks fire from RAOP's internal pthreads, so we AttachCurrentThread.
+  */
+ 
++#include <pthread.h>
+ #include <stdlib.h>
+ #include <string.h>
+ #include <time.h>
+@@ -15,11 +16,28 @@
+ #define LOGI(...) __android_log_print(ANDROID_LOG_INFO, TAG, __VA_ARGS__)
+ #define LOGE(...) __android_log_print(ANDROID_LOG_ERROR, TAG, __VA_ARGS__)
+ 
++/* A thread attached to the JVM must detach before it exits: Android 5's runtime aborts the whole
++   process ("Native thread exited without calling DetachCurrentThread") otherwise. Detach from a
++   pthread key destructor, which runs when the thread ends. */
++static pthread_key_t detach_key;
++static pthread_once_t detach_key_once = PTHREAD_ONCE_INIT;
++
++static void _detach_thread(void *jvm) {
++    if (jvm) (*(JavaVM *)jvm)->DetachCurrentThread((JavaVM *)jvm);
++}
++
++static void _make_detach_key(void) {
++    pthread_key_create(&detach_key, _detach_thread);
++}
++
+ static JNIEnv *_get_env(android_callback_ctx_t *ctx) {
+     JNIEnv *env = NULL;
+     int status = (*ctx->jvm)->GetEnv(ctx->jvm, (void **)&env, JNI_VERSION_1_6);
+     if (status == JNI_EDETACHED) {
+-        (*ctx->jvm)->AttachCurrentThread(ctx->jvm, &env, NULL);
++        if ((*ctx->jvm)->AttachCurrentThread(ctx->jvm, &env, NULL) == JNI_OK) {
++            pthread_once(&detach_key_once, _make_detach_key);
++            pthread_setspecific(detach_key, ctx->jvm);
++        }
+     }
+     /* Clear any pending exception from a previous callback on this thread,
+        otherwise JNI calls like NewByteArray will fatally abort. */
+diff --git a/app/src/main/kotlin/io/github/jqssun/airplay/Display.kt b/app/src/main/kotlin/io/github/jqssun/airplay/Display.kt
+index 231f425..c7ebe57 100644
+--- a/app/src/main/kotlin/io/github/jqssun/airplay/Display.kt
++++ b/app/src/main/kotlin/io/github/jqssun/airplay/Display.kt
+@@ -1,13 +1,25 @@
+ package io.github.jqssun.airplay
+ 
+ import android.content.Context
++import android.graphics.Point
+ import android.hardware.display.DisplayManager
++import android.os.Build
+ import android.view.Display
+ 
+ // physical panel resolution
+ fun Context.realDisplaySize(): Pair<Int, Int> {
+-    val mode = getSystemService(DisplayManager::class.java)
+-        ?.getDisplay(Display.DEFAULT_DISPLAY)?.mode
+-    return if (mode != null) mode.physicalWidth to mode.physicalHeight
+-    else resources.displayMetrics.let { it.widthPixels to it.heightPixels }
++    val display = (getSystemService(Context.DISPLAY_SERVICE) as? DisplayManager)
++        ?.getDisplay(Display.DEFAULT_DISPLAY)
++    if (display != null) {
++        // Display.getMode() needs Android 6.0; before that getRealSize() gives the panel size
++        if (Build.VERSION.SDK_INT >= 23) {
++            display.mode?.let { return it.physicalWidth to it.physicalHeight }
++        } else {
++            val size = Point()
++            @Suppress("DEPRECATION")
++            display.getRealSize(size)
++            if (size.x > 0 && size.y > 0) return size.x to size.y
++        }
++    }
++    return resources.displayMetrics.let { it.widthPixels to it.heightPixels }
+ }
+diff --git a/app/src/main/kotlin/io/github/jqssun/airplay/renderer/DecoderSelector.kt b/app/src/main/kotlin/io/github/jqssun/airplay/renderer/DecoderSelector.kt
+index 9b737ae..f71173c 100644
+--- a/app/src/main/kotlin/io/github/jqssun/airplay/renderer/DecoderSelector.kt
++++ b/app/src/main/kotlin/io/github/jqssun/airplay/renderer/DecoderSelector.kt
+@@ -168,7 +168,8 @@ class DecoderSelector(private val ctx: Context) {
+     }
+ 
+     private fun _rateSupported(caps: VideoCapabilities, w: Int, h: Int, fps: Int) = try {
+-        caps.getAchievableFrameRatesFor(w, h)?.let { fps <= it.upper }
++        // getAchievableFrameRatesFor() needs Android 6.0
++        (if (Build.VERSION.SDK_INT >= 23) caps.getAchievableFrameRatesFor(w, h) else null)?.let { fps <= it.upper }
+             ?: caps.areSizeAndRateSupported(w, h, fps.toDouble())
+     } catch (_: IllegalArgumentException) {
+         false
+diff --git a/app/src/main/kotlin/io/github/jqssun/airplay/ui/MainScreen.kt b/app/src/main/kotlin/io/github/jqssun/airplay/ui/MainScreen.kt
+index 6918d3e..828f837 100644
+--- a/app/src/main/kotlin/io/github/jqssun/airplay/ui/MainScreen.kt
++++ b/app/src/main/kotlin/io/github/jqssun/airplay/ui/MainScreen.kt
+@@ -69,14 +69,6 @@ import io.github.jqssun.airplay.viewmodel.MainViewModel
+ import androidx.compose.ui.res.painterResource
+ import androidx.compose.ui.res.stringResource
+ import androidx.media3.common.util.UnstableApi
+-import androidx.media3.datasource.DataSourceBitmapLoader
+-import androidx.media3.ui.compose.material3.MiniController
+-import androidx.media3.ui.compose.material3.buttons.NextButton
+-import androidx.media3.ui.compose.material3.buttons.PlayPauseButton
+-import androidx.media3.ui.compose.material3.buttons.PreviousButton
+-import androidx.media3.ui.compose.material3.indicator.DurationText
+-import androidx.media3.ui.compose.material3.indicator.PositionText
+-import androidx.media3.ui.compose.material3.indicator.ProgressSlider
+ import kotlin.math.abs
+ import kotlin.math.roundToInt
+ import kotlinx.coroutines.delay
+@@ -874,12 +866,7 @@ private fun HoldScanButton(
+ private fun AudioMiniController(viewModel: MainViewModel, visible: Boolean, onClick: () -> Unit) {
+     if (!visible) return
+     val player = viewModel.dacpPlayer ?: return
+-    val context = LocalContext.current
+-    MiniController(
+-        player,
+-        bitmapLoader = remember { DataSourceBitmapLoader.Builder(context).build() },
+-        onClick = onClick
+-    )
++    MiniController(player, onClick = onClick)
+ }
+ 
+ @Composable
+diff --git a/app/src/main/kotlin/io/github/jqssun/airplay/ui/PlayerWidgets.kt b/app/src/main/kotlin/io/github/jqssun/airplay/ui/PlayerWidgets.kt
+new file mode 100644
+index 0000000..d0b9dc4
+--- /dev/null
++++ b/app/src/main/kotlin/io/github/jqssun/airplay/ui/PlayerWidgets.kt
+@@ -0,0 +1,180 @@
++package io.github.jqssun.airplay.ui
++
++import android.graphics.BitmapFactory
++import androidx.compose.foundation.Image
++import androidx.compose.foundation.clickable
++import androidx.compose.foundation.layout.Arrangement
++import androidx.compose.foundation.layout.Row
++import androidx.compose.foundation.layout.fillMaxWidth
++import androidx.compose.foundation.layout.padding
++import androidx.compose.foundation.layout.size
++import androidx.compose.foundation.shape.RoundedCornerShape
++import androidx.compose.material.icons.Icons
++import androidx.compose.material.icons.filled.Pause
++import androidx.compose.material.icons.filled.PlayArrow
++import androidx.compose.material.icons.filled.SkipNext
++import androidx.compose.material.icons.filled.SkipPrevious
++import androidx.compose.foundation.layout.Column
++import androidx.compose.material3.Icon
++import androidx.compose.material3.IconButton
++import androidx.compose.material3.MaterialTheme
++import androidx.compose.material3.Slider
++import androidx.compose.material3.Surface
++import androidx.compose.material3.Text
++import androidx.compose.runtime.Composable
++import androidx.compose.runtime.DisposableEffect
++import androidx.compose.runtime.LaunchedEffect
++import androidx.compose.runtime.getValue
++import androidx.compose.runtime.mutableLongStateOf
++import androidx.compose.runtime.mutableStateOf
++import androidx.compose.runtime.remember
++import androidx.compose.runtime.setValue
++import androidx.compose.ui.Alignment
++import androidx.compose.ui.Modifier
++import androidx.compose.ui.graphics.asImageBitmap
++import androidx.compose.ui.layout.ContentScale
++import androidx.compose.ui.text.style.TextOverflow
++import androidx.compose.ui.unit.Dp
++import androidx.compose.ui.unit.dp
++import androidx.media3.common.MediaMetadata
++import androidx.media3.common.Player
++import kotlinx.coroutines.delay
++
++// Plain Material 3 stand-ins for androidx.media3:media3-ui-compose-material3, which needs Android 6.0 (API 23).
++
++private class PlayerView(private val player: Player) {
++    var playing by mutableStateOf(player.isPlaying)
++    var positionMs by mutableLongStateOf(player.currentPosition)
++    var durationMs by mutableLongStateOf(player.duration.coerceAtLeast(0))
++    var metadata by mutableStateOf(player.mediaMetadata)
++
++    fun read() {
++        playing = player.isPlaying
++        positionMs = player.currentPosition
++        durationMs = player.duration.coerceAtLeast(0)
++        metadata = player.mediaMetadata
++    }
++}
++
++@Composable
++private fun rememberPlayerView(player: Player): PlayerView {
++    val view = remember(player) { PlayerView(player) }
++    DisposableEffect(player) {
++        val listener = object : Player.Listener {
++            override fun onEvents(player: Player, events: Player.Events) = view.read()
++        }
++        player.addListener(listener)
++        view.read()
++        onDispose { player.removeListener(listener) }
++    }
++    LaunchedEffect(player, view.playing) {
++        while (view.playing) {
++            delay(500)
++            view.read()
++        }
++    }
++    return view
++}
++
++private fun formatMs(ms: Long): String {
++    val total = ms / 1000
++    val s = total % 60
++    val m = (total / 60) % 60
++    val h = total / 3600
++    return if (h > 0) "%d:%02d:%02d".format(h, m, s) else "%d:%02d".format(m, s)
++}
++
++@Composable
++fun PlayPauseButton(playing: Boolean, onClick: () -> Unit, modifier: Modifier = Modifier, iconSize: Dp = 40.dp) {
++    IconButton(onClick = onClick, modifier = modifier) {
++        Icon(
++            imageVector = if (playing) Icons.Default.Pause else Icons.Default.PlayArrow,
++            contentDescription = if (playing) "Pause" else "Play",
++            modifier = Modifier.size(iconSize)
++        )
++    }
++}
++
++@Composable
++fun PlayPauseButton(player: Player, modifier: Modifier = Modifier, iconSize: Dp = 40.dp) {
++    val view = rememberPlayerView(player)
++    PlayPauseButton(
++        playing = view.playing,
++        onClick = { if (player.isPlaying) player.pause() else player.play() },
++        modifier = modifier,
++        iconSize = iconSize
++    )
++}
++
++@Composable
++fun PreviousButton(player: Player, modifier: Modifier = Modifier) {
++    IconButton(onClick = { player.seekToPrevious() }, modifier = modifier) {
++        Icon(Icons.Default.SkipPrevious, contentDescription = "Previous", modifier = Modifier.size(32.dp))
++    }
++}
++
++@Composable
++fun NextButton(player: Player, modifier: Modifier = Modifier) {
++    IconButton(onClick = { player.seekToNext() }, modifier = modifier) {
++        Icon(Icons.Default.SkipNext, contentDescription = "Next", modifier = Modifier.size(32.dp))
++    }
++}
++
++@Composable
++fun PositionText(player: Player, modifier: Modifier = Modifier) {
++    val view = rememberPlayerView(player)
++    Text(formatMs(view.positionMs), modifier = modifier, style = MaterialTheme.typography.labelMedium)
++}
++
++@Composable
++fun DurationText(player: Player, modifier: Modifier = Modifier) {
++    val view = rememberPlayerView(player)
++    Text(formatMs(view.durationMs), modifier = modifier, style = MaterialTheme.typography.labelMedium)
++}
++
++@Composable
++fun ProgressSlider(player: Player, modifier: Modifier = Modifier) {
++    val view = rememberPlayerView(player)
++    var dragging by remember { mutableStateOf<Float?>(null) }
++    val duration = view.durationMs.coerceAtLeast(1L).toFloat()
++    Slider(
++        value = dragging ?: (view.positionMs / duration).coerceIn(0f, 1f),
++        onValueChange = { dragging = it },
++        onValueChangeFinished = {
++            dragging?.let { player.seekTo((it * duration).toLong()) }
++            dragging = null
++        },
++        modifier = modifier
++    )
++}
++
++@Composable
++fun MiniController(player: Player, onClick: () -> Unit, modifier: Modifier = Modifier) {
++    val view = rememberPlayerView(player)
++    val meta: MediaMetadata = view.metadata
++    val art = remember(meta.artworkData) {
++        meta.artworkData?.let { BitmapFactory.decodeByteArray(it, 0, it.size)?.asImageBitmap() }
++    }
++    Surface(
++        modifier = modifier.fillMaxWidth().clickable(onClick = onClick),
++        shape = RoundedCornerShape(12.dp),
++        color = MaterialTheme.colorScheme.surfaceContainerHigh
++    ) {
++        Row(
++            modifier = Modifier.padding(8.dp),
++            verticalAlignment = Alignment.CenterVertically,
++            horizontalArrangement = Arrangement.spacedBy(12.dp)
++        ) {
++            if (art != null) {
++                Image(art, contentDescription = null, contentScale = ContentScale.Crop, modifier = Modifier.size(48.dp))
++            }
++            Column(modifier = Modifier.weight(1f)) {
++                Text(meta.title?.toString().orEmpty(), maxLines = 1, overflow = TextOverflow.Ellipsis,
++                    style = MaterialTheme.typography.titleSmall)
++                Text(meta.artist?.toString().orEmpty(), maxLines = 1, overflow = TextOverflow.Ellipsis,
++                    style = MaterialTheme.typography.bodySmall)
++            }
++            PlayPauseButton(player, iconSize = 28.dp)
++        }
++    }
++}
+diff --git a/app/src/main/kotlin/io/github/jqssun/airplay/ui/gestures/GestureStates.kt b/app/src/main/kotlin/io/github/jqssun/airplay/ui/gestures/GestureStates.kt
+index 28bee34..dca6e24 100644
+--- a/app/src/main/kotlin/io/github/jqssun/airplay/ui/gestures/GestureStates.kt
++++ b/app/src/main/kotlin/io/github/jqssun/airplay/ui/gestures/GestureStates.kt
+@@ -2,6 +2,7 @@ package io.github.jqssun.airplay.ui.gestures
+ 
+ import android.content.BroadcastReceiver
+ import android.content.Context
++import android.os.Build
+ import android.content.Intent
+ import android.content.IntentFilter
+ import android.media.AudioDeviceInfo
+@@ -134,7 +135,8 @@ class SeekGestureState(private val viewModel: MainViewModel) {
+ 
+ @Stable
+ class ServerVolumeState(private val context: Context) {
+-    private val audioManager = context.getSystemService(AudioManager::class.java)
++    // getSystemService(Class) and getDevices() need Android 6.0
++    private val audioManager = context.getSystemService(Context.AUDIO_SERVICE) as AudioManager
+     private val maxVolume = audioManager.getStreamMaxVolume(AudioManager.STREAM_MUSIC)
+ 
+     var percentage by mutableIntStateOf(_current())
+@@ -171,8 +173,10 @@ class ServerVolumeState(private val context: Context) {
+         onDispose { context.unregisterReceiver(receiver) }
+     }
+ 
++    @Suppress("DEPRECATION")
+     private fun _isHeadsetOn(): Boolean =
+-        audioManager.getDevices(AudioManager.GET_DEVICES_OUTPUTS).any { device ->
++        if (Build.VERSION.SDK_INT < 23) audioManager.isWiredHeadsetOn || audioManager.isBluetoothA2dpOn
++        else audioManager.getDevices(AudioManager.GET_DEVICES_OUTPUTS).any { device ->
+             device.type == AudioDeviceInfo.TYPE_WIRED_HEADSET ||
+                 device.type == AudioDeviceInfo.TYPE_WIRED_HEADPHONES ||
+                 device.type == AudioDeviceInfo.TYPE_BLUETOOTH_A2DP ||
+diff --git a/gradle/libs.versions.toml b/gradle/libs.versions.toml
+index b16e61f..5750e47 100644
+--- a/gradle/libs.versions.toml
++++ b/gradle/libs.versions.toml
+@@ -2,7 +2,7 @@
+ agp = "9.4.1"
+ kotlin = "2.2.10"
+ ksp = "2.3.12"
+-compose-bom = "2026.05.00"
++compose-bom = "2025.08.00"
+ hilt = "2.60.1"
+ hilt-navigation = "1.2.0"
+ lifecycle = "2.9.4"
+@@ -10,7 +10,7 @@ activity-compose = "1.9.3"
+ core-ktx = "1.16.0"
+ datastore = "1.1.1"
+ coroutines = "1.9.0"
+-media3 = "1.11.1"
++media3 = "1.8.1"
+ oboe = "1.9.3"
+ 
+ [libraries]
+@@ -37,7 +37,6 @@ androidx-media = { group = "androidx.media", name = "media", version = "1.7.0" }
+ media3-exoplayer = { group = "androidx.media3", name = "media3-exoplayer", version.ref = "media3" }
+ media3-exoplayer-hls = { group = "androidx.media3", name = "media3-exoplayer-hls", version.ref = "media3" }
+ media3-transformer = { group = "androidx.media3", name = "media3-transformer", version.ref = "media3" }
+-media3-ui-compose-material3 = { group = "androidx.media3", name = "media3-ui-compose-material3", version.ref = "media3" }
+ 
+ kotlinx-coroutines = { group = "org.jetbrains.kotlinx", name = "kotlinx-coroutines-android", version.ref = "coroutines" }
+ 
